@@ -1,0 +1,44 @@
+@import '@xterm/xterm/css/xterm.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: #0d1117;
+  color: #e6edf3;
+  font-family: 'Segoe UI', 'Microsoft JhengHei', system-ui, sans-serif;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Slim scrollbars to match the dark theme */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #30363d;
+  border-radius: 6px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.term-host .xterm {
+  height: 100%;
+  padding: 8px 10px;
+}
+
+/* Dragging a file over a terminal: show where the path will be typed. */
+.term-host.drop-target {
+  outline: 2px dashed #2f81f7;
+  outline-offset: -3px;
+}

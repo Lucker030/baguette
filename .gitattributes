@@ -1,0 +1,24 @@
+# Normalize line endings so committing from Windows stops emitting a
+# "LF will be replaced by CRLF" warning for every file, and so the repo
+# content stays identical regardless of the contributor's platform.
+* text=auto eol=lf
+
+# Windows-only scripts must keep CRLF: cmd.exe mis-parses LF-only .bat/.cmd
+# files, and PowerShell here-strings are sensitive to line endings too.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary assets — never touch, never diff as text.
+*.ico binary
+*.png binary
+*.jpg binary
+*.gif binary
+*.node binary
+*.dll binary
+*.exe binary
+*.pdb binary
+
+# Generated: keep it in the repo for reproducible installs, but don't show it
+# in diffs or count it in language stats.
+package-lock.json -diff linguist-generated

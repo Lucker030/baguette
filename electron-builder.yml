@@ -1,0 +1,69 @@
+appId: com.ethanlin.localplatform
+productName: Local Platform
+copyright: Copyright © Ethan Lin
+
+directories:
+  buildResources: build
+  output: release
+
+# Only the built output and the runtime deps go in; src/ and the whole
+# tools/ short-path workaround are build-time only.
+files:
+  - out/**/*
+  - package.json
+
+# The tray icon and notification icon are read at runtime from
+# process.resourcesPath (see main/tray.ts appIconPath), so the .ico has to
+# travel outside the asar as a plain file.
+extraResources:
+  - from: build/icon.ico
+    to: icon.ico
+
+# There is no update server. A `generic` provider is declared only so that
+# electron-builder emits latest.yml (version + sha512 of the installer) next
+# to the .exe: main/updater.ts reads that from whatever folder the user points
+# the app at and verifies the installer before running it. The URL is never
+# contacted — nothing in this project ever runs `--publish`, and a generic
+# provider can't be published to anyway.
+publish:
+  provider: generic
+  url: http://127.0.0.1/unused-no-update-server
+
+# The only native dependency is node-pty, and its binary is ABI-stable across
+# Node and Electron (verified: the same .node loads under both), so there is
+# nothing to rebuild. Letting electron-builder try anyway fails outright here —
+# it shells out to node-gyp, which needs a full Visual Studio toolchain that
+# isn't installed, and node-gyp EMPTIES node-pty's build/ directory before it
+# fails, which breaks `npm run dev` too. Recover with:
+#   rm -r node_modules/@homebridge && npm install
+#
+# Note the Windows binary is NOT in the published tarball (its `prebuilds/`
+# ships Linux only) — the package's install script downloads it into
+# build/Release/. So `npm ci --ignore-scripts` produces a package whose
+# terminals all fail at runtime, quietly, via the node-pty load-error toast.
+npmRebuild: false
+
+# node-pty ships a native .node plus winpty-agent.exe / conpty helpers that
+# must exist as real files on disk — they cannot be loaded from inside the
+# asar archive.
+asar: true
+asarUnpack:
+  - '**/node_modules/@homebridge/node-pty-prebuilt-multiarch/**'
+
+win:
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch: [x64]
+
+nsis:
+  # Per-user install: no UAC prompt, and it lands in %LOCALAPPDATA% so the
+  # installed app never sits under a path we don't control.
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Local Platform
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico

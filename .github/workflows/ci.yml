@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    # Windows-only by design: the app shells out to schtasks, resolves Windows
+    # binary locations, and its one native dependency (node-pty) is exercised
+    # through ConPTY. A green Linux run would not tell us much.
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # electron's installer needs require(esm), i.e. Node >= 22.12
+          # (also pinned as `engines.node` in package.json).
+          node-version: '22.x'
+          cache: npm
+
+      # CI checks out to an ASCII path, so none of the tools/ 8.3 short-path
+      # workaround applies here — plain npm works. See tools/README.md.
+      - run: npm ci
+
+      - run: npm run lint
+
+      - run: npm run typecheck
+
+      - run: npm test
+
+      - run: npm run build
+
+      # Packaging is the newest and most fragile part of the build, and it is
+      # the only step that would catch a missing build resource (e.g. the
+      # installer icon) or a broken asarUnpack. `--dir` skips making the
+      # installer, so this stays fast.
+      - run: npx electron-builder --dir

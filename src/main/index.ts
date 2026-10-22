@@ -1,0 +1,492 @@
+import { app, BrowserWindow, ipcMain, shell, dialog, clipboard, Notification, nativeImage } from 'electron'
+import type { Tray } from 'electron'
+import { writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { PtyManager } from './pty-manager'
+import { listProviders, warmProviderCache } from './providers'
+import { listSkills, createSkill } from './skills'
+import { listHooks, createHook, updateHook, removeHook, setHookEnabled } from './hooks'
+import { getSnapshot, saveSnapshot } from './session-store'
+import { sendToRenderer } from './renderer-bridge'
+import { initLog, log, logDir, logFile } from './log'
+import { appIconPath, createTray } from './tray'
+import { checkForUpdate, installUpdate } from './updater'
+import {
+  addTodos,
+  clearDoneTodos,
+  listTodos,
+  removeTodo,
+  setTodoDone,
+  todosPath,
+  updateTodoText,
+  watchTodos
+} from './todos'
+import {
+  addKnowledge,
+  knowledgePath,
+  listKnowledge,
+  removeKnowledge,
+  updateKnowledge,
+  watchKnowledge
+} from './knowledge'
+import {
+  getSettings,
+  updateSettings,
+  addAccount,
+  renameAccount,
+  removeAccount,
+  setCurrentAccount,
+  getLaunchAtLogin,
+  setLaunchAtLogin,
+  resolveClaudeConfigDir
+} from './settings'
+import type {
+  AppPaths,
+  AppSettings,
+  CreateSessionOptions,
+  HookDef,
+  KnowledgeEntry,
+  Provider,
+  SessionLaunch,
+  SessionSnapshot,
+  UpdateCheckResult
+} from '../shared/types'
+
+const ptyManager = new PtyManager()
+let mainWindow: BrowserWindow | null = null
+let tray: Tray | null = null
+/** Set once quitting has begun, so the close handler stops hiding to tray. */
+let quitting = false
+
+// ---- Logging + crash guards ---------------------------------------------------
+//
+// Electron's default for an uncaught main-process exception is a modal error
+// dialog followed by exit — which takes every open CLI session down with it,
+// over what is usually a bug in some side feature. Log it and keep going; the
+// renderer shows a toast so it is not silent either. `sendToRenderer` is
+// itself guarded, so this handler cannot throw its way back in here.
+initLog(() => join(app.getPath('userData'), 'logs'))
+
+process.on('uncaughtException', (err) => {
+  log.error('uncaughtException', err)
+  sendToRenderer(mainWindow, 'app:error', `主程序發生錯誤（已記錄到 log）：${(err as Error)?.message ?? err}`)
+})
+process.on('unhandledRejection', (reason) => {
+  log.error('unhandledRejection', reason)
+})
+
+// ---- Validation of renderer-supplied IPC input ---------------------------------
+const PROVIDERS: Provider[] = ['claude', 'codex', 'copilot', 'shell']
+
+function sanitizeProvider(value: unknown): Provider | null {
+  return PROVIDERS.includes(value as Provider) ? (value as Provider) : null
+}
+
+/**
+ * A resume id ends up inside a `bash -lic` payload, which is parsed as shell
+ * source, so it is constrained to characters that cannot mean anything there.
+ * Anything else degrades to "continue the most recent conversation" rather
+ * than being passed along.
+ */
+const SESSION_ID_RE = /^[A-Za-z0-9._-]{1,64}$/
+
+function sanitizeLaunch(launch: unknown): SessionLaunch | undefined {
+  if (!launch || typeof launch !== 'object') return undefined
+  const kind = (launch as SessionLaunch).kind
+  if (kind === 'new' || kind === 'continue' || kind === 'pick') return { kind }
+  if (kind === 'resume') {
+    const sessionId = (launch as { sessionId?: unknown }).sessionId
+    if (typeof sessionId === 'string' && SESSION_ID_RE.test(sessionId)) {
+      return { kind: 'resume', sessionId }
+    }
+    return { kind: 'continue' }
+  }
+  return undefined
+}
+
+/** Bring the window back from hidden/minimized and give it focus. */
+function showMainWindow(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createWindow()
+    return
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show()
+  mainWindow.focus()
+}
+
+function createWindow(): void {
+  mainWindow = new BrowserWindow({
+    width: 1280,
+    height: 820,
+    minWidth: 900,
+    minHeight: 600,
+    show: false,
+    backgroundColor: '#0d1117',
+    autoHideMenuBar: true,
+    title: 'DashBoard',
+    icon: appIconPath(),
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  })
+
+  mainWindow.on('ready-to-show', () => mainWindow?.show())
+
+  // With closeToTray on, the ✕ button hides the window and every session keeps
+  // running; quitting happens from the tray menu (or before-quit, e.g. OS
+  // shutdown). If the tray could not be created there is nowhere to bring the
+  // window back from, so fall through to a real close in that case.
+  mainWindow.on('close', (e) => {
+    if (quitting || !tray || !getSettings().closeToTray) return
+    e.preventDefault()
+    mainWindow?.hide()
+  })
+
+  // Drop the reference once the window is gone. Without this, `mainWindow`
+  // keeps pointing at a destroyed BrowserWindow and every later pty event
+  // throws "Object has been destroyed" out of an unguarded listener.
+  mainWindow.on('closed', () => {
+    mainWindow = null
+  })
+
+  // Focusing the window is the user looking at it: stop flashing the taskbar.
+  mainWindow.on('focus', () => mainWindow?.flashFrame(false))
+
+  // A renderer crash used to leave a blank window with no explanation. Log it
+  // and reload; the store's init() adopts the sessions that are still alive in
+  // this process instead of replaying the tab snapshot, so nothing is spawned
+  // twice. (See store/sessions.ts.)
+  mainWindow.webContents.on('render-process-gone', (_e, details) => {
+    log.error(`renderer gone: ${details.reason} (exit ${details.exitCode})`)
+    if (details.reason === 'clean-exit') return
+    mainWindow?.webContents.reload()
+  })
+
+  // Open external links in the OS browser, not inside the app.
+  //
+  // Only http/https are handed to the OS. shell.openExternal will dispatch
+  // whatever scheme it is given to whichever program is registered for it,
+  // so an unvalidated URL here is a way to launch things. Every link in the
+  // app today is one we wrote ourselves (plus whatever a CLI prints, which
+  // xterm's link addon turns clickable), so the scheme allowlist stays.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) void shell.openExternal(url)
+    return { action: 'deny' }
+  })
+
+  if (process.env.ELECTRON_RENDERER_URL) {
+    mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
+  } else {
+    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+  }
+}
+
+// ---- Forward PtyManager events to the renderer --------------------------------
+// These fire from pty output, not from an IPC handler, so an exception here is
+// uncaught and crashes the main process — see sendToRenderer for why a bare
+// `mainWindow?.webContents.send(...)` is not a sufficient guard.
+function wirePtyEvents(): void {
+  ptyManager.on('data', (payload) => sendToRenderer(mainWindow, 'session:data', payload))
+  ptyManager.on('exit', (payload) => sendToRenderer(mainWindow, 'session:exit', payload))
+  ptyManager.on('status', (info) => sendToRenderer(mainWindow, 'session:status', info))
+  ptyManager.on('login-url', (payload) => sendToRenderer(mainWindow, 'session:loginUrl', payload))
+  ptyManager.on('busy', (payload) => sendToRenderer(mainWindow, 'session:busy', payload))
+  ptyManager.on('attention', (payload) => sendToRenderer(mainWindow, 'session:attention', payload))
+  ptyManager.on('auth-restart', (payload: { ids: string[] }) => {
+    log.info(`credentials refreshed; restarted ${payload.ids.length} stuck tab(s): ${payload.ids.join(', ')}`)
+    sendToRenderer(mainWindow, 'session:authRestart', payload)
+  })
+}
+
+/**
+ * The renderer decided a background session needs the user (it knows which
+ * tab is on screen; we don't). If the window itself isn't in front, escalate
+ * to the OS: a Windows toast plus a flashing taskbar button. Clicking the
+ * toast brings the window up on that tab.
+ */
+function notifyAttention(sessionId: string, title: string, body: string): void {
+  if (!getSettings().notifyOnAttention) return
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  if (mainWindow.isFocused() && mainWindow.isVisible()) return
+  mainWindow.flashFrame(true)
+  if (!Notification.isSupported()) return
+  const n = new Notification({ title, body, icon: nativeImage.createFromPath(appIconPath()), silent: false })
+  n.on('click', () => {
+    showMainWindow()
+    sendToRenderer(mainWindow, 'session:activateRequest', sessionId)
+  })
+  n.show()
+}
+
+// ---- Updates from a folder ----------------------------------------------------
+const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
+
+/** Scan settings.updateDir and tell the renderer if there is something newer. */
+function runUpdateCheck(): UpdateCheckResult {
+  const result = checkForUpdate(getSettings().updateDir, app.getVersion())
+  if (result.error) log.warn(`update check: ${result.error}`)
+  else if (result.latestVersion) log.info(`update available: ${result.latestVersion} at ${result.file}`)
+  sendToRenderer(mainWindow, 'update:result', result)
+  return result
+}
+
+/** A check shortly after launch (so startup isn't slowed) and then periodically. */
+function scheduleUpdateChecks(): void {
+  const tick = (): void => {
+    const s = getSettings()
+    if (s.updateDir && s.checkUpdatesOnLaunch) runUpdateCheck()
+  }
+  setTimeout(tick, 8000)
+  setInterval(tick, UPDATE_CHECK_INTERVAL_MS)
+}
+
+// ---- IPC handlers -------------------------------------------------------------
+function registerIpc(): void {
+  // Warm the (blocking) WSL probes off the event loop first, so listProviders
+  // itself answers from cache instead of freezing the app for seconds.
+  ipcMain.handle('providers:list', async () => {
+    await warmProviderCache()
+    return listProviders()
+  })
+
+  // Skills
+  ipcMain.handle('skills:list', () => listSkills(getSettings().defaultCwd))
+  ipcMain.handle('skills:create', (_e, name: string, description: string) =>
+    createSkill(name, description)
+  )
+
+  // Settings + Claude accounts
+  ipcMain.handle('settings:get', () => getSettings())
+  ipcMain.handle('settings:update', (_e, patch: Partial<AppSettings>) => updateSettings(patch))
+  // Read back from the OS every time rather than caching: the user can turn
+  // this off in Windows Settings or Task Manager without telling us.
+  ipcMain.handle('settings:getLaunchAtLogin', () => getLaunchAtLogin())
+  ipcMain.handle('settings:setLaunchAtLogin', (_e, enabled: boolean) => setLaunchAtLogin(enabled))
+  ipcMain.handle('accounts:add', (_e, label: string) => addAccount(label))
+  ipcMain.handle('accounts:rename', (_e, id: string, label: string) => renameAccount(id, label))
+  ipcMain.handle('accounts:remove', (_e, id: string) => removeAccount(id))
+  ipcMain.handle('accounts:setCurrent', (_e, id: string | null) => setCurrentAccount(id))
+
+  // App housekeeping: where our files are, and a way to get at the log.
+  ipcMain.handle(
+    'app:paths',
+    (): AppPaths => ({
+      userData: app.getPath('userData'),
+      logsDir: logDir(),
+      logFile: logFile(),
+      version: app.getVersion()
+    })
+  )
+
+  // Folder-based updates (see updater.ts). The install call never returns
+  // normally on success: the app quits and the installer relaunches it.
+  ipcMain.handle('update:check', () => runUpdateCheck())
+  ipcMain.handle('update:install', () => {
+    const result = runUpdateCheck()
+    if (!result.latestVersion) throw new Error(result.error ?? '目前已是最新版本')
+    quitting = true
+    try {
+      installUpdate(result)
+    } catch (e) {
+      quitting = false
+      throw e
+    }
+  })
+  ipcMain.handle('app:openPath', (_e, target: 'userData' | 'logs') =>
+    shell.openPath(target === 'logs' ? logDir() : app.getPath('userData'))
+  )
+  // The renderer's own failures (ErrorBoundary, unhandled rejections) go into
+  // the same log as main's, so one file tells the whole story.
+  ipcMain.on('app:log', (_e, level: unknown, message: unknown) => {
+    const text = String(message ?? '').slice(0, 4000)
+    if (level === 'error') log.error(`[renderer] ${text}`)
+    else if (level === 'warn') log.warn(`[renderer] ${text}`)
+    else log.info(`[renderer] ${text}`)
+  })
+  ipcMain.on('app:notifyAttention', (_e, sessionId: unknown, title: unknown, body: unknown) =>
+    notifyAttention(String(sessionId ?? ''), String(title ?? 'DashBoard').slice(0, 100), String(body ?? '').slice(0, 200))
+  )
+
+  // Hook 庫 (managed hooks mirrored into ~/.claude/settings.json). Input is
+  // validated inside hooks.ts (sanitizeHookPatch).
+  ipcMain.handle('hooks:list', () => listHooks())
+  ipcMain.handle('hooks:create', (_e, input: Omit<HookDef, 'id'>) => createHook(input))
+  ipcMain.handle('hooks:update', (_e, id: string, patch: Partial<Omit<HookDef, 'id'>>) =>
+    updateHook(String(id), patch)
+  )
+  ipcMain.handle('hooks:remove', (_e, id: string) => removeHook(String(id)))
+  ipcMain.handle('hooks:setEnabled', (_e, id: string, enabled: boolean) =>
+    setHookEnabled(String(id), enabled === true)
+  )
+
+  // 每日代辦事項
+  ipcMain.handle('todos:list', () => listTodos())
+  ipcMain.handle('todos:add', (_e, texts: string[], date?: string) =>
+    addTodos(Array.isArray(texts) ? texts : [String(texts ?? '')], date || undefined)
+  )
+  ipcMain.handle('todos:setDone', (_e, id: string, done: boolean) => setTodoDone(id, done))
+  ipcMain.handle('todos:updateText', (_e, id: string, text: string) => updateTodoText(id, text))
+  ipcMain.handle('todos:remove', (_e, id: string) => removeTodo(id))
+  ipcMain.handle('todos:clearDone', () => clearDoneTodos())
+  // Shown in the panel so the skill's target file is discoverable from the UI.
+  ipcMain.handle('todos:path', () => todosPath())
+
+  // 知識庫 — 'note' (freeform lessons/SOPs) and 'db' (SQLite registry entries)
+  // share one file and one panel, split by a tab in the UI.
+  type KnowledgeFields = Partial<
+    Pick<KnowledgeEntry, 'kind' | 'title' | 'content' | 'dbFile' | 'dbPath' | 'tags'>
+  >
+  ipcMain.handle('knowledge:list', () => listKnowledge())
+  ipcMain.handle('knowledge:add', (_e, fields: KnowledgeFields) => addKnowledge(fields ?? {}))
+  ipcMain.handle('knowledge:update', (_e, id: string, patch: KnowledgeFields) =>
+    updateKnowledge(id, patch)
+  )
+  ipcMain.handle('knowledge:remove', (_e, id: string) => removeKnowledge(id))
+  ipcMain.handle('knowledge:path', () => knowledgePath())
+
+  // Clipboard (used for reliable paste/copy in the pty terminal — see TerminalView).
+  ipcMain.handle('clipboard:readText', () => clipboard.readText())
+  ipcMain.handle('clipboard:writeText', (_e, text: unknown) => clipboard.writeText(String(text ?? '')))
+
+  /**
+   * Spill a clipboard image to a temp PNG and return its path, or null when
+   * the clipboard holds no image.
+   *
+   * A pty carries bytes, not images, so "paste a screenshot" can only mean
+   * handing the CLI a file it can open — which is exactly what Claude Code
+   * does with an image path. Files land in the OS temp dir and are left for
+   * the OS to reclaim; the CLI may still be reading one when the tab closes.
+   */
+  ipcMain.handle('clipboard:readImageAsFile', () => {
+    const image = clipboard.readImage()
+    if (image.isEmpty()) return null
+    const file = join(app.getPath('temp'), `dashboard-paste-${Date.now()}.png`)
+    try {
+      writeFileSync(file, image.toPNG())
+      return file
+    } catch {
+      return null
+    }
+  })
+
+  // Native folder picker (used by the settings default-path field).
+  ipcMain.handle('dialog:pickDirectory', async () => {
+    const opts: Electron.OpenDialogOptions = {
+      title: '選擇資料夾',
+      properties: ['openDirectory']
+    }
+    const res = mainWindow
+      ? await dialog.showOpenDialog(mainWindow, opts)
+      : await dialog.showOpenDialog(opts)
+    return res.canceled || res.filePaths.length === 0 ? null : res.filePaths[0]
+  })
+
+  // Sessions
+  ipcMain.handle('session:create', (_e, opts: CreateSessionOptions) => {
+    // Everything here arrives from the renderer, so rebuild the options from
+    // known-good fields rather than spreading them. `command`/`commandArgs`
+    // are filled in here from the resolved provider, never taken from the
+    // renderer's input — accepting them there would turn any renderer-side
+    // compromise into arbitrary process execution.
+    const provider = sanitizeProvider(opts?.provider)
+    if (!provider) throw new Error(`未知的 provider：${String(opts?.provider)}`)
+
+    const settings = getSettings()
+    const enriched: CreateSessionOptions = {
+      provider,
+      cwd: typeof opts?.cwd === 'string' && opts.cwd ? opts.cwd : settings.defaultCwd,
+      accountId: typeof opts?.accountId === 'string' ? opts.accountId : undefined,
+      autoOpenLoginUrl: opts?.autoOpenLoginUrl === true,
+      launch: sanitizeLaunch(opts?.launch),
+      cols: typeof opts?.cols === 'number' ? opts.cols : undefined,
+      rows: typeof opts?.rows === 'number' ? opts.rows : undefined
+    }
+    if (provider === 'claude') {
+      enriched.claudeConfigDir = resolveClaudeConfigDir(enriched.accountId ?? settings.currentAccountId)
+    }
+    const info = ptyManager.create(enriched)
+    if (info.status === 'error') log.warn(`session ${info.id} (${provider}) failed to start: ${info.message}`)
+    return info
+  })
+  ipcMain.handle('session:list', () => ptyManager.list())
+  // Called once per terminal when it mounts; returns the output produced
+  // before it could subscribe (the startup banner, an early prompt) and starts
+  // live streaming for that session.
+  ipcMain.handle('session:attach', (_e, id: string) => ptyManager.attach(id))
+  ipcMain.on('session:write', (_e, id: string, data: string) => ptyManager.write(id, data))
+  ipcMain.on('session:resize', (_e, id: string, cols: number, rows: number) =>
+    ptyManager.resize(id, cols, rows)
+  )
+  ipcMain.on('session:kill', (_e, id: string) => ptyManager.kill(id))
+  // Re-spawn in place (same tab, resumed conversation) — the manual twin of
+  // the automatic restart after another tab's login.
+  ipcMain.handle('session:restart', (_e, id: string) => ptyManager.restart(String(id)))
+
+  // Open-tab snapshot (persisted across app restarts; see session-store.ts).
+  ipcMain.handle('sessions:getSnapshot', () => getSnapshot())
+  ipcMain.handle('sessions:saveSnapshot', (_e, snap: SessionSnapshot) => saveSnapshot(snap))
+}
+
+// Only one copy may run at a time. Every instance shares one userData
+// directory (settings.json, hooks.json, sessions.json) AND reconciles hooks
+// into the same ~/.claude/settings.json, so a second instance silently fights
+// the first: last writer wins, and the tab snapshot of whichever quits last
+// overwrites the other. That is easy to hit now that the app is installed —
+// double-clicking the shortcut twice, or running `npm run dev` while the
+// installed build is open.
+if (!app.requestSingleInstanceLock()) {
+  app.quit()
+} else {
+  // Someone tried to launch a second copy: surface the window we already have
+  // (it may be hidden in the tray) instead of doing nothing, which would look
+  // like the app failed to start.
+  app.on('second-instance', () => showMainWindow())
+
+  // Windows groups taskbar buttons and attributes toast notifications by this
+  // id; the NSIS installer registers the same one for the shortcut.
+  app.setAppUserModelId('com.ethanlin.localplatform')
+
+  app.whenReady().then(() => {
+    log.info(`DashBoard ${app.getVersion()} starting (electron ${process.versions.electron})`)
+    registerIpc()
+    wirePtyEvents()
+    // A Claude session edits todos.json directly (see the daily-todos skill),
+    // so the panel follows the file rather than only its own writes.
+    watchTodos(() => sendToRenderer(mainWindow, 'todos:changed', listTodos()))
+    // Same idea for knowledge.json (see the knowledge-capture skill).
+    watchKnowledge(() => sendToRenderer(mainWindow, 'knowledge:changed', listKnowledge()))
+    tray = createTray({
+      onShow: showMainWindow,
+      onQuit: () => {
+        quitting = true
+        app.quit()
+      }
+    })
+    if (!tray) log.warn('tray unavailable; close-to-tray disabled for this run')
+    createWindow()
+    scheduleUpdateChecks()
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    })
+  })
+
+  app.on('child-process-gone', (_e, details) => {
+    log.error(`child process gone: ${details.type} ${details.reason} (exit ${details.exitCode})`)
+  })
+}
+
+app.on('window-all-closed', () => {
+  ptyManager.killAll()
+  if (process.platform !== 'darwin') app.quit()
+})
+
+app.on('before-quit', () => {
+  quitting = true
+  ptyManager.killAll()
+  log.info('quitting')
+})
