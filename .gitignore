@@ -12,6 +12,9 @@ tools/npm-cache/
 tools/electron-cache/
 tools/builder-cache/
 
+# scripts/make_icon.py --preview scratch
+build/compare.png
+
 *.log
 *.log.err
 *.tsbuildinfo

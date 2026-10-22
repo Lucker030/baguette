@@ -1,4 +1,6 @@
-# Local Platform (DashBoard)
+# baguette
+
+<img src="build/icon-preview.png" alt="baguette icon" width="96" align="right">
 
 An Electron desktop app that multiplexes CLI AI agent sessions — Claude Code,
 ChatGPT (Codex CLI), Copilot and a plain shell — into one tabbed terminal UI,
@@ -71,8 +73,8 @@ with libraries for Skills, hooks, daily to-dos and a knowledge base.
 Earlier versions also shipped a 遊戲區 (five card/dice games with REST-backed
 AI seats) and a 學習區 (LeetCode/SQL/Japanese drills, a TOEIC vocabulary book,
 an NYT RSS reader). Both were removed in 0.25.0 along with the AI-vendor REST
-layer and API-key storage that only they used; `git log` before that release
-has the full implementation if any of it is ever wanted back.
+layer and API-key storage that only they used. That code is not part of this
+repository's history.
 
 ## Stack
 
@@ -125,7 +127,7 @@ Two packaging details worth knowing before changing `electron-builder.yml`:
 ### ⚠️ This machine cannot use a plain `node` / `npm`
 
 The developer's Windows profile path contains CJK characters
-(`C:\Users\EthanLin林郁宸\…`), and Node's loader crashes (`0xC0000005`) when
+(`C:\Users\<中文名>\…`), and Node's loader crashes (`0xC0000005`) when
 resolving modules through a non-ASCII path. Everything therefore runs through
 the Windows 8.3 **short** path using the portable Node vendored in
 `tools/node`. Read [`tools/README.md`](tools/README.md) before touching the

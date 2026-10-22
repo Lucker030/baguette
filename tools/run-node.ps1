@@ -2,7 +2,7 @@ param(
   [string]$LogPath,
   [string[]]$CmdArgs
 )
-# This machine's user profile contains CJK characters (EthanLin林郁宸). Node v22
+# This machine's user profile contains CJK characters. Node v22
 # crashes (access violation) when the module/script path it loads contains those
 # characters, so we run everything through 8.3 SHORT paths, which stay ASCII.
 $ErrorActionPreference = 'Stop'

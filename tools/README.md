@@ -1,7 +1,7 @@
 # tools/
 
 This folder exists to work around one specific problem: **this machine's Windows
-user profile path contains CJK characters** (`C:\Users\EthanLin林郁宸\...`), and
+user profile path contains CJK characters** (`C:\Users\<中文名>\...`), and
 Node's native module loader crashes (`0xC0000005`) when it has to resolve
 modules through a non-ASCII path. Everything here forces the app to run through
 the Windows 8.3 **short (ASCII) path** instead.
