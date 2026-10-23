@@ -28,7 +28,7 @@ Set-Location $short
 
 npm itself: `& $node "$short\tools\node\node_modules\npm\bin\npm-cli.js" <args>`
 with `--ignore-scripts` when adding/removing packages, so node-pty's install
-script is never re-run (see README "Installing" for why that matters).
+script is never re-run (see the `npmRebuild` comment in electron-builder.yml).
 
 Packaging the installer (`release/Local Platform Setup <version>.exe`):
 
