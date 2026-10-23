@@ -1,0 +1,54 @@
+name: Release
+
+# Push a version tag (e.g. `git tag v1.0.1 && git push origin v1.0.1`) and
+# this builds the Windows installer and attaches it to a GitHub Release, so a
+# new machine can just download the .exe instead of cloning and building.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # Same reasoning as ci.yml: the app is Windows-only and node-pty's Windows
+    # binary is only fetched by its install script on Windows.
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+
+      # The tag is the release name, package.json version is what the app and
+      # updater.ts see. Refuse to publish if they disagree, so a Release never
+      # carries an installer that reports a different version.
+      - name: Check tag matches package.json version
+        shell: pwsh
+        run: |
+          $pkg = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $tag = '${{ github.ref_name }}'.TrimStart('v')
+          if ($pkg -ne $tag) { throw "tag v$tag != package.json $pkg" }
+
+      # Plain `npm ci`, NOT --ignore-scripts: node-pty's install script is what
+      # downloads its Windows binary (see electron-builder.yml). Without it the
+      # installer builds fine but every terminal fails at runtime.
+      - run: npm ci
+
+      - run: npm run build
+
+      # --publish never: the `generic` provider in electron-builder.yml only
+      # exists to emit latest.yml; uploading is done by the next step.
+      - run: npx electron-builder --win --publish never
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          draft: false
+          files: |
+            release/*.exe
+            release/latest.yml
