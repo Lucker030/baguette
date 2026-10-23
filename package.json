@@ -1,6 +1,6 @@
 {
   "name": "local-platform",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Local AI CLI agent platform — 多開 CLI、多帳號、Skills／Hook 庫、代辦與知識庫",
   "main": "./out/main/index.js",
   "author": "Ethan",
