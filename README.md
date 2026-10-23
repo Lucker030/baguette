@@ -2,53 +2,42 @@
 
 <img src="build/icon-preview.png" alt="baguette icon" width="96" align="right">
 
-A Windows desktop app that runs Claude Code, Codex, Copilot, Antigravity
-(`agy`) and a plain shell as tabs in one window, plus panels for Skills,
-hooks, to-dos and notes.
+把多個 AI CLI 放在同一個視窗裡用分頁開的 Windows 桌面 App。
 
-## Install
+## 支援的 AI
 
-Download `baguette-Setup-<version>.exe` from [Releases](../../releases) and run
-it. You can pick the install folder. New tabs start in the folder the app's
-`.exe` is in until you set another 預設工作目錄 in 設定.
+| | Windows 版 | WSL 版 |
+|---|---|---|
+| Claude Code | ✅ | ✅ |
+| Codex | ✅ | ✅ |
+| GitHub Copilot | ✅ | ✅ |
+| Antigravity（`agy`） | ✅ | ✅ |
+| 一般終端 | PowerShell | WSL bash |
 
-## Features
+- 裝在 Windows 或 WSL 都會自動偵測；官方安裝程式、npm、pnpm、bun、Volta、Scoop、winget 裝的都找得到。
+- 兩邊都有裝時，可在「設定 → CLI 執行環境」選要用哪一版。
 
-- **Tabs** — real terminals, grouped, split, renamed; reopened on next launch.
-- **Windows or WSL, per CLI** — each CLI is found whether it's installed on
-  Windows (official installer, npm, pnpm, bun, Volta, Scoop, winget) or inside
-  WSL. 設定 → CLI 執行環境 shows both and lets you pick 自動 / Windows / WSL.
-- **Attention dot** — a tab that finished working gets marked, with a Windows
-  notification if the window is in the background.
-- **Shortcuts** — Ctrl+Shift+T new tab, Ctrl+Shift+W close, Alt+1…9 jump,
-  Ctrl+Shift+D split, Ctrl+Shift+F search. Full list in 設定.
-- **Tray** — closing the window keeps sessions running in the tray.
-- **Multiple accounts** — Claude, Codex and Copilot each keep several logins
-  side by side; for Claude, log in once and every tab picks it up.
-- **Skills 庫 / Hook 庫** — browse and manage Claude Code skills and hooks.
-- **代辦事項 / 知識庫** — daily to-dos and notes that a Claude session can also
-  write into.
-- **Updates** — the app checks this repo's GitHub Releases, and 設定 → 更新
-  downloads, verifies (sha512 from `latest.yml`) and installs a newer build.
+## 功能
 
-## Development
+- **分頁** — 真正的終端，可分組、分割畫面、改名；重開 App 會接回上次的對話。
+- **多帳號** — Claude、Codex、Copilot 都能存多個帳號，一鍵切換。
+- **提醒** — 背景分頁跑完或在等你確認時，側欄亮黃點並跳 Windows 通知。
+- **系統匣** — 關掉視窗 session 繼續跑。
+- **Skills 庫 / Hook 庫** — 管理 Claude Code 的 skills 和 hooks。
+- **代辦事項 / 知識庫** — Claude 也能直接寫進來。
+- **自動更新** — 從這個 repo 的 Releases 檢查新版，一鍵下載安裝。
+
+## 安裝
+
+到 [Releases](../../releases) 下載 `baguette-Setup-<版本>.exe` 執行即可。
+
+## 開發
 
 ```sh
 npm install
-npm run dev        # run in dev mode
-npm test           # tests
-npm run dist       # build the installer into release/
+npm run dev     # 開發模式
+npm test        # 測試
+npm run dist    # 打包安裝檔到 release/
 ```
 
-The repo must sit on an English-only path; Node crashes on paths with Chinese
-characters. If yours does, see [`tools/README.md`](tools/README.md).
-
-## Release
-
-Bump `version` in `package.json`, commit, then push a tag `v<version>`
-(`git tag v1.0.1 && git push origin v1.0.1`). Actions refuses a tag that
-disagrees with `package.json`, builds `baguette-Setup-<version>.exe` and
-publishes it with `latest.yml`; installed copies pick it up on their next
-check.
-
-Stack: Electron · React · xterm.js · TypeScript · Tailwind · Vitest.
+發新版：改 `package.json` 的 `version`，commit 後推 `v<版本>` tag，GitHub Actions 會自動建置並發布。
