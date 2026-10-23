@@ -3,6 +3,7 @@ import { execFile, execFileSync } from 'node:child_process'
 import { join, delimiter } from 'node:path'
 import os from 'node:os'
 import type { Provider, ProviderMeta } from '../shared/types'
+import { describeError, log } from './log'
 
 /** True only for something Windows/POSIX could actually execute. */
 function isExecutableFile(path: string): boolean {
@@ -123,7 +124,10 @@ function wslHasCmd(cmd: string): boolean {
 function wslHasCmdAsync(cmd: string): Promise<boolean> {
   if (cmd in wslCmdCache) return Promise.resolve(wslCmdCache[cmd])
   const wsl = wslExePath()
-  if (!wsl) return Promise.resolve((wslCmdCache[cmd] = false))
+  if (!wsl) {
+    log.warn(`WSL probe for ${cmd}: wsl.exe not found on PATH`)
+    return Promise.resolve((wslCmdCache[cmd] = false))
+  }
   return new Promise((resolve) => {
     execFile(
       wsl,
@@ -134,7 +138,20 @@ function wslHasCmdAsync(cmd: string): Promise<boolean> {
       // whole run, so a short cap made claude/codex show as 未偵測到 until
       // the app was restarted. Being async, the longer wait blocks nothing.
       { timeout: 20000, windowsHide: true },
-      (err) => resolve((wslCmdCache[cmd] = !err))
+      (err, stdout, stderr) => {
+        // Logged because "未偵測到" alone says nothing about why: the same
+        // command can succeed in the user's terminal and fail from the app.
+        if (err) {
+          log.warn(
+            `WSL probe for ${cmd} failed via ${wsl}: ${describeError(err)}` +
+              ` | stdout=${JSON.stringify(String(stdout).slice(0, 300))}` +
+              ` | stderr=${JSON.stringify(String(stderr).slice(0, 300))}`
+          )
+        } else {
+          log.info(`WSL probe for ${cmd}: ${String(stdout).trim()}`)
+        }
+        resolve((wslCmdCache[cmd] = !err))
+      }
     )
   })
 }
@@ -395,6 +412,7 @@ const HINTS: Record<Provider, string> = {
 export function listProviders(): ProviderMeta[] {
   return (['claude', 'codex', 'copilot', 'shell'] as Provider[]).map((id) => {
     const resolved = resolveProvider(id)
+    log.info(`provider ${id}: ${resolved ? `${resolved.command} ${resolved.args.join(' ')}`.trim() : 'not found'}`)
     return {
       id,
       label: LABELS[id],
