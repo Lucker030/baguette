@@ -230,7 +230,7 @@ describe('Schedule hooks -> Windows Task Scheduler', () => {
 
     const create = schtasksCalls.find((c) => c.includes('/create'))
     expect(create).toBeDefined()
-    expect(create).toContain(`Baguette_Hook_${hook.id}`)
+    expect(create).toContain(`DashBoard_Hook_${hook.id}`)
     expect(create).toContain('WEEKLY')
     expect(create).toContain('09:00')
     expect(create).toContain('MON,FRI')
@@ -271,7 +271,7 @@ describe('Schedule hooks -> Windows Task Scheduler', () => {
 
     const del = schtasksCalls.find((c) => c.includes('/delete'))
     expect(del).toBeDefined()
-    expect(del).toContain(`Baguette_Hook_${hook.id}`)
+    expect(del).toContain(`DashBoard_Hook_${hook.id}`)
   })
 })
 

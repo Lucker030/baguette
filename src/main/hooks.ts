@@ -247,8 +247,10 @@ function schedulesDir(): string {
   return dir
 }
 
+// Still the pre-rename "DashBoard_" prefix on purpose: Windows Scheduled Tasks
+// already created under this name must keep being found, updated and removed.
 function scheduleTaskName(hookId: string): string {
-  return `Baguette_Hook_${hookId}`
+  return `DashBoard_Hook_${hookId}`
 }
 
 /** Best-effort schtasks invocation; scheduling is Windows-only and non-critical. */
@@ -279,7 +281,7 @@ function reconcileSchedules(store: HookStore): string[] {
     runSchtasks(['/delete', '/tn', name, '/f'])
     // Also drop the generated wrapper. Leaving it behind means a command the
     // user believes they deleted stays readable on disk indefinitely.
-    const hookId = name.replace(/^Baguette_Hook_/, '')
+    const hookId = name.replace(/^DashBoard_Hook_/, '')
     try {
       rmSync(join(schedulesDir(), `${hookId}.bat`), { force: true })
     } catch {

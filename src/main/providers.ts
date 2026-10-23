@@ -4,7 +4,7 @@ import { join, delimiter } from 'node:path'
 import os from 'node:os'
 import type { Provider, ProviderMeta, Runtime, RuntimePref } from '../shared/types'
 import { PROVIDERS } from '../shared/types'
-import { log } from './log'
+import { describeError, log } from './log'
 
 /** True only for something Windows/POSIX could actually execute. */
 function isExecutableFile(path: string): boolean {
@@ -224,10 +224,21 @@ export function parseWslProbe(stdout: string): Set<string> | null {
 let wslState: { usable: boolean; found: Set<string> } | null = null
 let wslInflight: Promise<void> | null = null
 
-function settleWsl(stdout: string, err: unknown): void {
+/**
+ * Logged either way because "未偵測到" alone says nothing about why: the same
+ * command can succeed in the user's terminal and fail from the app.
+ */
+function settleWsl(stdout: string, err: unknown, stderr = ''): void {
   const found = parseWslProbe(stdout)
-  if (found) wslState = { usable: true, found }
-  else log.warn(`WSL probe got no complete answer (${(err as Error | null)?.message ?? 'no marker'}); will retry`)
+  if (found) {
+    wslState = { usable: true, found }
+    log.info(`WSL probe: found ${[...found].join(', ') || 'none of the CLIs'}`)
+  } else {
+    log.warn(
+      `WSL probe got no complete answer, will retry: ${err ? describeError(err) : 'no end marker'}` +
+        ` | stdout=${JSON.stringify(stdout.slice(0, 300))} | stderr=${JSON.stringify(stderr.slice(0, 300))}`
+    )
+  }
 }
 
 /** Probe WSL off the event loop. Concurrent callers share one trip. */
@@ -236,13 +247,14 @@ function probeWslAsync(): Promise<void> {
   if (wslInflight) return wslInflight
   const wsl = wslExePath()
   if (!wsl) {
+    log.warn('WSL probe: wsl.exe not found on PATH')
     wslState = { usable: false, found: new Set() }
     return Promise.resolve()
   }
   wslInflight = new Promise<void>((resolve) => {
-    execFile(wsl, wslProbeArgs(), { timeout: WSL_PROBE_TIMEOUT_MS, windowsHide: true }, (err, stdout) => {
+    execFile(wsl, wslProbeArgs(), { timeout: WSL_PROBE_TIMEOUT_MS, windowsHide: true }, (err, stdout, stderr) => {
       wslInflight = null
-      settleWsl(String(stdout ?? ''), err)
+      settleWsl(String(stdout ?? ''), err, String(stderr ?? ''))
       resolve()
     })
   })
@@ -263,7 +275,8 @@ function probeWslSync(): void {
   try {
     settleWsl(execFileSync(wsl, wslProbeArgs(), { encoding: 'utf8', timeout: 5000, windowsHide: true }), null)
   } catch (err) {
-    settleWsl(String((err as { stdout?: unknown }).stdout ?? ''), err)
+    const e = err as { stdout?: unknown; stderr?: unknown }
+    settleWsl(String(e.stdout ?? ''), err, String(e.stderr ?? ''))
   }
 }
 
@@ -543,6 +556,9 @@ export function listProviders(): ProviderMeta[] {
     const wslAvailable = wslKnown(id)
     const runtime: Runtime | undefined = resolved ? (resolved.command === wslExePath() ? 'wsl' : 'windows') : undefined
     const installedElsewhere = !resolved && (!!win || wslAvailable === true)
+    log.info(
+      `provider ${id} (${pref}): ${resolved ? `${resolved.command} ${resolved.args.join(' ')}`.trim() : 'not available'}`
+    )
     return {
       id,
       label: LABELS[id],

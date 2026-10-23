@@ -44,6 +44,18 @@ jobs:
 
       # Packaging is the newest and most fragile part of the build, and it is
       # the only step that would catch a missing build resource (e.g. the
-      # installer icon) or a broken asarUnpack. `--dir` skips making the
-      # installer, so this stays fast.
+      # installer icon) or a broken asarUnpack. On main it builds the real
+      # installer and keeps it as a run artifact, so a build can be tried on a
+      # machine without Node/npm without cutting a versioned Release.
       - run: npx electron-builder --dir
+        if: github.ref != 'refs/heads/main'
+
+      - run: npx electron-builder --win --publish never
+        if: github.ref == 'refs/heads/main'
+
+      - uses: actions/upload-artifact@v4
+        if: github.ref == 'refs/heads/main'
+        with:
+          name: installer-${{ github.sha }}
+          path: release/baguette-Setup-*.exe
+          retention-days: 14
