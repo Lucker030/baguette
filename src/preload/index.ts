@@ -6,6 +6,7 @@ import type {
   SkillInfo,
   HookDef,
   Account,
+  AccountProvider,
   AppPaths,
   AppSettings,
   LoginUrlEvent,
@@ -43,12 +44,13 @@ const api = {
     ipcRenderer.invoke('settings:getLaunchAtLogin'),
   setLaunchAtLogin: (enabled: boolean): Promise<LaunchAtLoginState> =>
     ipcRenderer.invoke('settings:setLaunchAtLogin', enabled),
-  addAccount: (label: string): Promise<Account> => ipcRenderer.invoke('accounts:add', label),
+  addAccount: (label: string, provider?: AccountProvider): Promise<Account> =>
+    ipcRenderer.invoke('accounts:add', label, provider),
   renameAccount: (id: string, label: string): Promise<AppSettings> =>
     ipcRenderer.invoke('accounts:rename', id, label),
   removeAccount: (id: string): Promise<AppSettings> => ipcRenderer.invoke('accounts:remove', id),
-  setCurrentAccount: (id: string | null): Promise<AppSettings> =>
-    ipcRenderer.invoke('accounts:setCurrent', id),
+  setCurrentAccount: (id: string | null, provider?: AccountProvider): Promise<AppSettings> =>
+    ipcRenderer.invoke('accounts:setCurrent', id, provider),
 
   // App housekeeping
   getAppPaths: (): Promise<AppPaths> => ipcRenderer.invoke('app:paths'),
@@ -66,10 +68,12 @@ const api = {
   /** Main-process errors that were caught and logged, surfaced as a toast. */
   onAppError: (cb: (message: string) => void): Unsubscribe => subscribe('app:error', cb),
 
-  // Updates from a folder (settings.updateDir) — see main/updater.ts.
+  // Updates from GitHub Releases — see main/updater.ts.
   checkForUpdate: (): Promise<UpdateCheckResult> => ipcRenderer.invoke('update:check'),
-  /** Copies, verifies, launches the installer and quits; rejects if it can't. */
+  /** Downloads, verifies, launches the installer and quits; rejects if it can't. */
   installUpdate: (): Promise<void> => ipcRenderer.invoke('update:install'),
+  /** Open the project's GitHub Releases page in the browser. */
+  openReleasePage: (): Promise<void> => ipcRenderer.invoke('update:openReleasePage'),
   /** Result of a scheduled (launch / periodic) check. */
   onUpdateResult: (cb: (r: UpdateCheckResult) => void): Unsubscribe =>
     subscribe('update:result', cb),
@@ -169,6 +173,6 @@ const api = {
     subscribe('session:authRestart', cb)
 }
 
-export type LocalPlatformApi = typeof api
+export type BaguetteApi = typeof api
 
 contextBridge.exposeInMainWorld('api', api)

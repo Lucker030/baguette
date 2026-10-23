@@ -1,5 +1,14 @@
 import { useState } from 'react'
+import { ACCOUNT_PROVIDERS, type AccountProvider } from '@shared/types'
 import { useApp } from '../store/sessions'
+import { PROVIDER_UI } from '../providerUi'
+
+/** Each CLI's own default config dir — the implicit first account. */
+const DEFAULT_DIR: Record<AccountProvider, string> = {
+  claude: '~/.claude',
+  codex: '~/.codex',
+  copilot: '~/.copilot'
+}
 
 export function AccountsManager(): JSX.Element {
   const {
@@ -10,89 +19,88 @@ export function AccountsManager(): JSX.Element {
     setCurrentAccount,
     createSession
   } = useApp()
+  const [provider, setProvider] = useState<AccountProvider>('claude')
   const [newLabel, setNewLabel] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editLabel, setEditLabel] = useState('')
 
-  const accounts = settings?.accounts ?? []
-  const currentId = settings?.currentAccountId ?? null
+  const accounts = (settings?.accounts ?? []).filter((a) => (a.provider ?? 'claude') === provider)
+  const currentId =
+    provider === 'claude' ? (settings?.currentAccountId ?? null) : (settings?.currentAccounts?.[provider] ?? null)
+  const label = PROVIDER_UI[provider].label
 
   const add = async (): Promise<void> => {
-    const label = newLabel.trim()
-    if (!label) return
-    await addAccount(label)
+    const name = newLabel.trim()
+    if (!name) return
+    await addAccount(name, provider)
     setNewLabel('')
   }
 
   const login = (id: string | null): void => {
-    // Open a Claude session bound to this account and run `claude`. We scan the
-    // early output for the login URL ourselves and open it via Electron's
+    // Open a session of this CLI bound to this account. For Claude we scan
+    // the early output for the login URL ourselves and open it via Electron's
     // shell.openExternal, since the CLI's own browser-launch is unreliable
     // inside this app's pty — the terminal fallback (press `c` to copy) still
-    // works if detection misses it. /login re-auths, /logout signs out.
-    void createSession('claude', { accountId: id ?? 'default', autoOpenLoginUrl: true })
+    // works if detection misses it. The other CLIs run their own sign-in
+    // (`/login` inside the tab) against the account's folder.
+    void createSession(provider, { accountId: id ?? 'default', autoOpenLoginUrl: provider === 'claude' })
   }
 
-  // The built-in default account is rendered as a fixed first row.
+  // The CLI's built-in default account is rendered as a fixed first row.
   const rows: { id: string | null; label: string; dir: string; removable: boolean }[] = [
-    { id: null, label: '預設帳號', dir: '~/.claude', removable: false },
+    { id: null, label: '預設帳號', dir: DEFAULT_DIR[provider], removable: false },
     ...accounts.map((a) => ({ id: a.id, label: a.label, dir: a.configDir, removable: true }))
   ]
 
   return (
-    <div className="max-w-2xl space-y-3">
-      <h2 className="text-sm font-medium">Claude 帳號</h2>
-
-      <div className="space-y-2 text-xs leading-relaxed text-txt-dim">
-        <p>
-          每個帳號是一份獨立的 Claude 設定/憑證目錄（官方環境變數 <code>CLAUDE_CONFIG_DIR</code>，
-          憑證存在該目錄下的 <code>.credentials.json</code>）。選「設為目前」後，從上方新開的 Claude
-          session 就會用該帳號。
-        </p>
-        <p>
-          <span className="text-txt-base">登入方式：</span>按「登入」會開一個綁定該帳號的分頁並執行{' '}
-          <code>claude</code>。若該帳號還沒登入過，這個 App 會自動偵測登入連結並{' '}
-          <span className="text-txt-base">直接幫你開啟瀏覽器</span>
-          （不依賴 CLI 自己叫瀏覽器，較可靠），讓你用 Claude Pro / Max 訂閱或 Console 帳號登入；
-          若沒偵測到，終端分頁上方會跳出連結可手動開啟，或在終端按 <code>c</code> 複製登入網址。
-          已登入過則直接可用。
-        </p>
-        <p>
-          之後在終端可用 <code>/login</code> 重新登入或切換身分、<code>/logout</code> 登出、
-          <code>/status</code> 查看目前登入的帳號與方案。
-        </p>
-      </div>
-
-      <div className="flex gap-2 pt-2">
-        <input
-          value={newLabel}
-          onChange={(e) => setNewLabel(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && void add()}
-          placeholder="新帳號名稱，例如 work、personal"
-          className="flex-1 rounded-md border border-line bg-bg-base px-3 py-2 text-sm outline-none focus:border-copilot"
-        />
-        <button
-          onClick={() => void add()}
-          className="rounded-md bg-copilot px-4 py-2 text-sm font-medium text-white hover:opacity-90"
+    <div className="space-y-3">
+      <div className="flex gap-1 rounded-lg border border-line bg-bg-panel p-1 text-xs w-fit">
+        {ACCOUNT_PROVIDERS.map((p) => (
+          <button
+            key={p}
+            onClick={() => {
+              setProvider(p)
+              setEditingId(null)
+            }}
+            className={`flex items-center gap-1.5 rounded-md px-3 py-1 ${
+              p === provider ? 'bg-bg-hover text-txt-base' : 'text-txt-dim hover:text-txt-base'
+            }`}
+          >
+            <span className="h-2 w-2 rounded-full" style={{ background: PROVIDER_UI[p].color }} />
+            {PROVIDER_UI[p].label}
+          </button>
+        ))}
+        <span
+          title="agy 的登入固定存在 Windows 認證管理員的 gemini:antigravity，換資料夾分不開帳號；要換帳號請在分頁裡 /logout 再 /login"
+          className="flex cursor-not-allowed items-center gap-1.5 rounded-md px-3 py-1 text-txt-dim/50"
         >
-          ＋ 新增帳號
-        </button>
+          <span className="h-2 w-2 rounded-full opacity-50" style={{ background: PROVIDER_UI.antigravity.color }} />
+          Antigravity
+        </span>
       </div>
+
+      <p className="text-xs text-txt-dim">
+        點圓點切換目前帳號，新開的 {label} 分頁會用它；「登入」會用該帳號開一個 {label} 分頁讓你登入。
+      </p>
 
       <ul className="space-y-2">
         {rows.map((row) => {
           const isCurrent = (row.id ?? null) === currentId
-          const isEditing = editingId === row.id
+          // The default row's id is null, and so is editingId when nothing is
+          // being renamed — compare only real ids, or the default row is
+          // permanently stuck showing an empty rename box.
+          const isEditing = row.id !== null && editingId === row.id
           return (
             <li
               key={row.id ?? '__default__'}
-              className={`rounded-lg border px-3 py-2.5 ${
+              title={row.dir}
+              className={`rounded-lg border px-3 py-2 ${
                 isCurrent ? 'border-copilot/60 bg-bg-hover' : 'border-line bg-bg-panel'
               }`}
             >
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => void setCurrentAccount(row.id)}
+                  onClick={() => void setCurrentAccount(row.id, provider)}
                   title="設為目前帳號"
                   className={`grid h-4 w-4 shrink-0 place-items-center rounded-full border ${
                     isCurrent ? 'border-copilot' : 'border-line'
@@ -124,7 +132,7 @@ export function AccountsManager(): JSX.Element {
 
                 <button
                   onClick={() => login(row.id)}
-                  title="開分頁並執行 claude；未登入過會自動開瀏覽器登入"
+                  title={`用這個帳號開一個 ${label} 分頁；還沒登入過的話在分頁裡完成登入`}
                   className="rounded border border-line px-2 py-1 text-xs text-txt-dim hover:bg-bg-base hover:text-txt-base"
                 >
                   登入
@@ -149,13 +157,27 @@ export function AccountsManager(): JSX.Element {
                   </button>
                 )}
               </div>
-              <div className="mt-1 pl-6 text-[11px] text-txt-dim">
-                <code className="break-all">{row.dir}</code>
-              </div>
             </li>
           )
         })}
       </ul>
+
+      <div className="flex gap-2">
+        <input
+          value={newLabel}
+          onChange={(e) => setNewLabel(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && void add()}
+          placeholder="新帳號名稱，例如 work"
+          className="flex-1 rounded-md border border-line bg-bg-base px-3 py-1.5 text-sm outline-none focus:border-copilot"
+        />
+        <button
+          onClick={() => void add()}
+          disabled={!newLabel.trim()}
+          className="rounded-md border border-line px-3 py-1.5 text-xs text-txt-dim hover:bg-bg-hover hover:text-txt-base disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          ＋ 新增
+        </button>
+      </div>
     </div>
   )
 }

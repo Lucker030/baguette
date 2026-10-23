@@ -1,9 +1,13 @@
 import { app } from 'electron'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import os from 'node:os'
-import type { Account, AppSettings, LaunchAtLoginState, SessionGroup } from '../shared/types'
+import type { Account, AccountProvider, AppSettings, LaunchAtLoginState, SessionGroup } from '../shared/types'
 import {
+  ACCOUNT_PROVIDERS,
+  PROVIDERS,
+  isAccountProvider,
+  isRuntimePref,
   TERMINAL_FONT_SIZE_DEFAULT,
   TERMINAL_FONT_SIZE_MAX,
   TERMINAL_FONT_SIZE_MIN
@@ -11,8 +15,9 @@ import {
 import { writeFileAtomic } from './atomic-write'
 
 // Persist a small JSON blob in the app's userData dir. This holds the default
-// working directory and the list of extra Claude accounts. Each account maps to
-// an isolated CLAUDE_CONFIG_DIR so multiple Claude logins can coexist.
+// working directory and the list of extra accounts. Each account maps to an
+// isolated config dir (CLAUDE_CONFIG_DIR / CODEX_HOME / COPILOT_HOME) so
+// several logins of the same CLI can coexist.
 
 function settingsPath(): string {
   return join(app.getPath('userData'), 'settings.json')
@@ -22,18 +27,38 @@ function accountsRoot(): string {
   return join(app.getPath('userData'), 'accounts')
 }
 
+/**
+ * Where new sessions start until the user picks something else: the folder
+ * the app's own exe sits in, not the user profile on C:. The user keeps the
+ * app next to their work (often on another drive), so that is the useful
+ * starting point.
+ *
+ * - portable build: electron-builder's portable stub unpacks to a temp dir
+ *   and says where the real .exe was in PORTABLE_EXECUTABLE_DIR;
+ * - installed / unpacked build: the folder of process.execPath;
+ * - `electron-vite dev`: execPath is electron.exe inside node_modules, so use
+ *   the project folder instead.
+ */
+export function exeDir(): string {
+  const portable = process.env.PORTABLE_EXECUTABLE_DIR
+  if (portable) return portable
+  if (app.isPackaged) return dirname(app.getPath('exe'))
+  return app.getAppPath() || os.homedir()
+}
+
 function defaults(): AppSettings {
   return {
-    defaultCwd: os.homedir(),
+    defaultCwd: exeDir(),
     accounts: [],
     currentAccountId: null,
+    currentAccounts: {},
     groups: [],
     restoreTabs: true,
     closeToTray: true,
     notifyOnAttention: true,
     terminalFontSize: TERMINAL_FONT_SIZE_DEFAULT,
-    updateDir: '',
-    checkUpdatesOnLaunch: true
+    checkUpdatesOnLaunch: true,
+    runtimePrefs: {}
   }
 }
 
@@ -41,6 +66,47 @@ function defaults(): AppSettings {
 function clampFontSize(value: unknown): number {
   const n = typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : TERMINAL_FONT_SIZE_DEFAULT
   return Math.min(TERMINAL_FONT_SIZE_MAX, Math.max(TERMINAL_FONT_SIZE_MIN, n))
+}
+
+/**
+ * Keep only well-formed accounts. Ones written before accounts had a
+ * `provider` are Claude's — that was the only kind there was.
+ */
+function normalizeAccounts(value: unknown): Account[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter(
+      (a): a is Account =>
+        !!a && typeof a.id === 'string' && typeof a.label === 'string' && typeof a.configDir === 'string'
+    )
+    .map((a) => ({
+      id: a.id,
+      label: a.label,
+      configDir: a.configDir,
+      provider: isAccountProvider(a.provider) ? a.provider : 'claude'
+    }))
+}
+
+/** `{ codex: 'id' | null, ... }` with unknown keys and non-string ids dropped. */
+function normalizeCurrentAccounts(value: unknown): AppSettings['currentAccounts'] {
+  const out: AppSettings['currentAccounts'] = {}
+  if (!value || typeof value !== 'object') return out
+  for (const p of ACCOUNT_PROVIDERS) {
+    const v = (value as Record<string, unknown>)[p]
+    if (v === null || typeof v === 'string') out[p] = v
+  }
+  return out
+}
+
+/** `{ codex: 'wsl', ... }` with unknown providers and values dropped. */
+function normalizeRuntimePrefs(value: unknown): AppSettings['runtimePrefs'] {
+  const out: AppSettings['runtimePrefs'] = {}
+  if (!value || typeof value !== 'object') return out
+  for (const p of PROVIDERS) {
+    const v = (value as Record<string, unknown>)[p]
+    if (isRuntimePref(v)) out[p] = v
+  }
+  return out
 }
 
 let cache: AppSettings | null = null
@@ -51,9 +117,10 @@ function load(): AppSettings {
     const raw = readFileSync(settingsPath(), 'utf8')
     const parsed = JSON.parse(raw) as Partial<AppSettings>
     cache = {
-      defaultCwd: parsed.defaultCwd || os.homedir(),
-      accounts: Array.isArray(parsed.accounts) ? parsed.accounts : [],
+      defaultCwd: parsed.defaultCwd || exeDir(),
+      accounts: normalizeAccounts(parsed.accounts),
       currentAccountId: parsed.currentAccountId ?? null,
+      currentAccounts: normalizeCurrentAccounts(parsed.currentAccounts),
       groups: Array.isArray(parsed.groups)
         ? parsed.groups.map((g: Partial<SessionGroup>) => ({
             id: g.id ?? '',
@@ -65,7 +132,7 @@ function load(): AppSettings {
       closeToTray: parsed.closeToTray ?? true,
       notifyOnAttention: parsed.notifyOnAttention ?? true,
       terminalFontSize: clampFontSize(parsed.terminalFontSize),
-      updateDir: typeof parsed.updateDir === 'string' ? parsed.updateDir : '',
+      runtimePrefs: normalizeRuntimePrefs(parsed.runtimePrefs),
       checkUpdatesOnLaunch: parsed.checkUpdatesOnLaunch ?? true
     }
   } catch {
@@ -106,16 +173,16 @@ export function updateSettings(patch: Partial<AppSettings>): AppSettings {
   if (typeof patch?.closeToTray === 'boolean') next.closeToTray = patch.closeToTray
   if (typeof patch?.notifyOnAttention === 'boolean') next.notifyOnAttention = patch.notifyOnAttention
   if (typeof patch?.terminalFontSize === 'number') next.terminalFontSize = clampFontSize(patch.terminalFontSize)
-  if (typeof patch?.updateDir === 'string') next.updateDir = patch.updateDir.trim()
   if (typeof patch?.checkUpdatesOnLaunch === 'boolean') next.checkUpdatesOnLaunch = patch.checkUpdatesOnLaunch
   if (patch?.currentAccountId === null || typeof patch?.currentAccountId === 'string') {
     next.currentAccountId = patch.currentAccountId
   }
-  if (Array.isArray(patch?.accounts)) {
-    next.accounts = patch.accounts.filter(
-      (a): a is Account =>
-        !!a && typeof a.id === 'string' && typeof a.label === 'string' && typeof a.configDir === 'string'
-    )
+  if (Array.isArray(patch?.accounts)) next.accounts = normalizeAccounts(patch.accounts)
+  if (patch?.runtimePrefs && typeof patch.runtimePrefs === 'object') {
+    next.runtimePrefs = normalizeRuntimePrefs(patch.runtimePrefs)
+  }
+  if (patch?.currentAccounts && typeof patch.currentAccounts === 'object') {
+    next.currentAccounts = normalizeCurrentAccounts(patch.currentAccounts)
   }
   if (Array.isArray(patch?.groups)) {
     next.groups = patch.groups
@@ -131,8 +198,13 @@ function slugify(label: string): string {
   return base || 'account'
 }
 
-/** Create a new account with an isolated config dir under userData/accounts. */
-export function addAccount(label: string): Account {
+/**
+ * Create a new account with an isolated config dir under userData/accounts.
+ * Claude's live directly in accounts/<id> (where existing ones already are);
+ * the other CLIs get accounts/<provider>/<id>. Ids are unique across all
+ * providers, so one id always means one account.
+ */
+export function addAccount(label: string, provider: AccountProvider = 'claude'): Account {
   const s = load()
   const name = label.trim() || '未命名帳號'
   // Ensure a unique id even if labels collide.
@@ -143,13 +215,13 @@ export function addAccount(label: string): Account {
     while (taken.has(`${id}-${n}`)) n++
     id = `${id}-${n}`
   }
-  const configDir = join(accountsRoot(), id)
+  const configDir = provider === 'claude' ? join(accountsRoot(), id) : join(accountsRoot(), provider, id)
   try {
     mkdirSync(configDir, { recursive: true })
   } catch {
     /* dir may already exist */
   }
-  const account: Account = { id, label: name, configDir }
+  const account: Account = { id, label: name, provider, configDir }
   persist({ ...s, accounts: [...s.accounts, account] })
   return account
 }
@@ -169,24 +241,41 @@ export function removeAccount(id: string): AppSettings {
     ...s,
     accounts: s.accounts.filter((a) => a.id !== id),
     currentAccountId: s.currentAccountId === id ? null : s.currentAccountId,
+    currentAccounts: Object.fromEntries(
+      Object.entries(s.currentAccounts).map(([p, cur]) => [p, cur === id ? null : cur])
+    ),
     groups: s.groups.map((g) => (g.accountId === id ? { ...g, accountId: 'default' } : g))
   })
 }
 
-export function setCurrentAccount(id: string | null): AppSettings {
+/** Select `id` (null = the CLI's default dir) as the current account of `provider`. */
+export function setCurrentAccount(id: string | null, provider: AccountProvider = 'claude'): AppSettings {
   const s = load()
-  const valid = id === null || s.accounts.some((a) => a.id === id)
-  return persist({ ...s, currentAccountId: valid ? id : null })
+  const valid = id === null || s.accounts.some((a) => a.id === id && a.provider === provider)
+  const next = valid ? id : null
+  if (provider === 'claude') return persist({ ...s, currentAccountId: next })
+  return persist({ ...s, currentAccounts: { ...s.currentAccounts, [provider]: next } })
+}
+
+/** The account id a new `provider` session uses when none is given explicitly. */
+export function currentAccountFor(provider: AccountProvider): string | null {
+  const s = load()
+  return provider === 'claude' ? s.currentAccountId : (s.currentAccounts[provider] ?? null)
 }
 
 /**
- * Resolve the CLAUDE_CONFIG_DIR for a given account selector.
- * `null` or 'default' → undefined (use the built-in ~/.claude).
+ * Resolve the config dir for a given account selector of `provider`.
+ * `null`, 'default', an unknown id, or another CLI's account → undefined (use
+ * the CLI's built-in default). The provider check matters: a group's bound
+ * account is a Claude account, and must never be handed to Codex as CODEX_HOME.
  * Ensures the target dir exists before returning it.
  */
-export function resolveClaudeConfigDir(accountId: string | null | undefined): string | undefined {
+export function resolveAccountDir(
+  provider: AccountProvider,
+  accountId: string | null | undefined
+): string | undefined {
   if (!accountId || accountId === 'default') return undefined
-  const account = load().accounts.find((a) => a.id === accountId)
+  const account = load().accounts.find((a) => a.id === accountId && a.provider === provider)
   if (!account) return undefined
   if (!existsSync(account.configDir)) {
     try {
@@ -196,6 +285,11 @@ export function resolveClaudeConfigDir(accountId: string | null | undefined): st
     }
   }
   return account.configDir
+}
+
+/** Claude's CLAUDE_CONFIG_DIR for an account selector — see resolveAccountDir. */
+export function resolveClaudeConfigDir(accountId: string | null | undefined): string | undefined {
+  return resolveAccountDir('claude', accountId)
 }
 
 // ---- Launch at login -----------------------------------------------------

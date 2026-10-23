@@ -1,8 +1,8 @@
-import type { LocalPlatformApi } from './index'
+import type { BaguetteApi } from './index'
 
 declare global {
   interface Window {
-    api: LocalPlatformApi
+    api: BaguetteApi
   }
 }
 

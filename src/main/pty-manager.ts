@@ -5,12 +5,12 @@ import { join } from 'node:path'
 import { createRequire } from 'node:module'
 import { shell } from 'electron'
 import type { CreateSessionOptions, SessionInfo, SessionLaunch } from '../shared/types'
+import { ACCOUNT_DIR_ENV, isAccountProvider } from '../shared/types'
 import { ActivityTracker } from './activity'
 import { AUTH_TAIL_KEEP, classifyAuthOutput, watchCredentials } from './auth-watch'
 import {
-  resolveProvider,
   resolveClaudeLaunch,
-  resolveCodexLaunch,
+  resolveLaunch,
   claudeCredentialsPath,
   claudeProjectDirectory
 } from './providers'
@@ -100,13 +100,22 @@ function launchArgs(
         return { extraArgs: ['resume', launch.sessionId] }
     }
   }
+  if (provider === 'antigravity') {
+    // agy has --continue and --conversation <id>, but no picker flag and no
+    // way for us to learn a tab's conversation id, so every resumable kind
+    // means "continue the most recent conversation".
+    return { extraArgs: launch.kind === 'new' ? [] : ['--continue'] }
+  }
   return { extraArgs: [] }
 }
 
 /** Providers that get a startup banner, and the label it's shown under. */
 const BANNER_LABELS: Partial<Record<CreateSessionOptions['provider'], string>> = {
   claude: 'Claude',
-  codex: 'ChatGPT（Codex CLI）'
+  codex: 'Codex',
+  copilot: 'Copilot',
+  antigravity: 'Antigravity（agy）',
+  shell: 'Shell'
 }
 
 /** Short human label for the launch mode, shown in the startup banner. */
@@ -238,13 +247,19 @@ export class PtyManager extends EventEmitter {
       session.backlog = `${session.backlog}\r\n\x1b[31m${message}\x1b[0m\r\n`.slice(-BACKLOG_LIMIT)
     }
 
+    // Non-Claude account: the CLI's own config-dir variable (CODEX_HOME,
+    // COPILOT_HOME) pointed at that account's folder. Claude's goes through
+    // claudeConfigDir, which several Claude-only features also key off.
+    const accountEnv =
+      opts.accountDir && opts.provider !== 'claude' && isAccountProvider(opts.provider)
+        ? { name: ACCOUNT_DIR_ENV[opts.provider], dir: opts.accountDir }
+        : undefined
+
     const resolved = opts.command
       ? { command: opts.command, args: opts.commandArgs ?? [] }
       : opts.provider === 'claude'
         ? resolveClaudeLaunch(cwd, opts.claudeConfigDir, extraArgs)
-        : opts.provider === 'codex'
-          ? resolveCodexLaunch(cwd, extraArgs)
-          : resolveProvider(opts.provider)
+        : resolveLaunch(opts.provider, cwd, extraArgs, accountEnv)
     if (!resolved) {
       fail(`找不到「${opts.provider}」對應的執行檔，請先安裝或加入 PATH。`)
       return
@@ -258,12 +273,13 @@ export class PtyManager extends EventEmitter {
 
     // Per-account Claude config lives in an isolated CLAUDE_CONFIG_DIR so
     // multiple Claude logins can coexist; omitted → the built-in ~/.claude.
-    // DASHBOARD_SESSION_ID lets anything the CLI spawns (a Claude Code hook,
+    // BAGUETTE_SESSION_ID lets anything the CLI spawns (a Claude Code hook,
     // a script) find out which tab it is running in. Nothing reads it yet.
-    const env: NodeJS.ProcessEnv = { ...process.env, TERM: 'xterm-256color', DASHBOARD_SESSION_ID: id }
+    const env: NodeJS.ProcessEnv = { ...process.env, TERM: 'xterm-256color', BAGUETTE_SESSION_ID: id }
     if (opts.provider === 'claude' && opts.claudeConfigDir) {
       env.CLAUDE_CONFIG_DIR = opts.claudeConfigDir
     }
+    if (accountEnv) env[accountEnv.name] = accountEnv.dir
 
     // node-pty throws synchronously for an unreadable cwd or a file that isn't
     // a valid executable. Letting that escape rejects the session:create IPC,
@@ -297,16 +313,20 @@ export class PtyManager extends EventEmitter {
     const bannerLabel = BANNER_LABELS[opts.provider]
     if (bannerLabel) {
       const viaWsl = /[\\/]wsl(\.exe)?$/i.test(resolved.command)
-      const mode = viaWsl ? 'WSL（Linux 後援）' : 'Windows 原生'
+      const mode = viaWsl ? 'WSL 版' : 'Windows 版'
       const acctPart =
-        opts.provider === 'claude' ? ` · 帳號目錄：${opts.claudeConfigDir ?? '預設帳號（~/.claude）'}` : ''
+        opts.provider === 'claude'
+          ? ` · 帳號目錄：${opts.claudeConfigDir ?? '預設帳號（~/.claude）'}`
+          : accountEnv
+            ? ` · 帳號目錄：${accountEnv.dir}`
+            : ''
       // Through pushOutput: on a first launch nothing is attached yet and the
       // line lands in the backlog; on a restart the terminal is live and
       // sees it immediately.
       this.pushOutput(
         session,
         id,
-        `\x1b[2m[DashBoard] ${bannerLabel} 啟動方式：${mode}${acctPart}${launchLabel(launch)}\x1b[0m\r\n`
+        `\x1b[2m[baguette] ${bannerLabel} 啟動方式：${mode}${acctPart}${launchLabel(launch)}\x1b[0m\r\n`
       )
     }
 
@@ -468,7 +488,7 @@ export class PtyManager extends EventEmitter {
       : session.launch.kind === 'new'
         ? { kind: 'new' }
         : { kind: 'continue' }
-    this.pushOutput(session, id, `\r\n\x1b[2m[DashBoard] ${why}…\x1b[0m\r\n`)
+    this.pushOutput(session, id, `\r\n\x1b[2m[baguette] ${why}…\x1b[0m\r\n`)
     this.launch(session, launch, session.lastSize ?? {})
     this.emit('status', session.info)
     return session.info

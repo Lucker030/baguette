@@ -174,7 +174,7 @@ function backupClaudeSettingsOnce(): void {
   const path = claudeSettingsPath()
   if (!existsSync(path)) return
   try {
-    copyFileSync(path, `${path}.dashboard-bak`)
+    copyFileSync(path, `${path}.baguette-bak`)
   } catch {
     /* best-effort: a missing backup must not block the sync */
   }
@@ -248,7 +248,7 @@ function schedulesDir(): string {
 }
 
 function scheduleTaskName(hookId: string): string {
-  return `DashBoard_Hook_${hookId}`
+  return `Baguette_Hook_${hookId}`
 }
 
 /** Best-effort schtasks invocation; scheduling is Windows-only and non-critical. */
@@ -279,7 +279,7 @@ function reconcileSchedules(store: HookStore): string[] {
     runSchtasks(['/delete', '/tn', name, '/f'])
     // Also drop the generated wrapper. Leaving it behind means a command the
     // user believes they deleted stays readable on disk indefinitely.
-    const hookId = name.replace(/^DashBoard_Hook_/, '')
+    const hookId = name.replace(/^Baguette_Hook_/, '')
     try {
       rmSync(join(schedulesDir(), `${hookId}.bat`), { force: true })
     } catch {

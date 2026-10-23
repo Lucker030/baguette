@@ -41,14 +41,17 @@ jobs:
 
       - run: npm run build
 
-      # --publish never: the `generic` provider in electron-builder.yml only
-      # exists to emit latest.yml; uploading is done by the next step.
+      # --publish never: the github provider in electron-builder.yml is there
+      # to emit latest.yml; uploading is done by the next step.
       - run: npx electron-builder --win --publish never
 
+      # Not a draft or prerelease: the in-app updater reads
+      # /releases/latest, which skips both. Only the installer itself — not
+      # the __uninstaller-*.exe electron-builder leaves in release/.
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           draft: false
           files: |
-            release/*.exe
+            release/baguette-Setup-*.exe
             release/latest.yml

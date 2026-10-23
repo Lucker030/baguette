@@ -36,7 +36,7 @@ export function TopBar(): JSX.Element {
             <StatusDot status={active.status} />
           </>
         ) : (
-          <span className="text-sm text-txt-dim">DashBoard</span>
+          <span className="text-sm text-txt-dim">baguette</span>
         )}
       </div>
 

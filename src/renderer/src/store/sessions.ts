@@ -1,10 +1,12 @@
 import { create } from 'zustand'
 import type {
+  AccountProvider,
   AppSettings,
   AttentionReason,
   UpdateCheckResult,
   Provider,
   ProviderMeta,
+  RuntimePref,
   SessionGroup,
   SessionInfo,
   SessionLaunch,
@@ -157,10 +159,13 @@ interface AppState {
   pickNextCwd: () => Promise<void>
   saveDefaultCwd: (path: string) => Promise<void>
   setRestoreTabs: (enabled: boolean) => Promise<void>
-  addAccount: (label: string) => Promise<void>
+  addAccount: (label: string, provider?: AccountProvider) => Promise<void>
   renameAccount: (id: string, label: string) => Promise<void>
   removeAccount: (id: string) => Promise<void>
-  setCurrentAccount: (id: string | null) => Promise<void>
+  setCurrentAccount: (id: string | null, provider?: AccountProvider) => Promise<void>
+  /** Choose Windows / WSL / auto for one provider, then re-detect. */
+  setRuntimePref: (provider: Provider, pref: RuntimePref) => Promise<void>
+  refreshProviders: () => Promise<void>
 
   // Toasts
   pushToast: (message: string) => void
@@ -187,7 +192,6 @@ interface AppState {
   setNotifyOnAttention: (enabled: boolean) => Promise<void>
 
   // Updates
-  setUpdateDir: (dir: string) => Promise<void>
   setCheckUpdatesOnLaunch: (enabled: boolean) => Promise<void>
   checkForUpdate: () => Promise<void>
   installUpdate: () => Promise<void>
@@ -280,6 +284,25 @@ export const useApp = create<AppState>((set, get) => ({
       nextCwd: settings.defaultCwd,
       terminalFontSize: settings.terminalFontSize ?? TERMINAL_FONT_SIZE_DEFAULT
     })
+
+    // A WSL-only CLI can come back "unavailable" from a probe that failed
+    // without an answer (a very slow cold start); main does not cache that,
+    // so ask again a few times instead of showing 未偵測到 for the whole run.
+    const recheck = (attempt: number): void => {
+      // Also while WSL's answer is still unknown, so 設定 fills in that column.
+      const missing = get().providers.some((p) => (!p.available && p.id !== 'shell') || p.wslAvailable === null)
+      if (!missing || attempt > 3) return
+      window.setTimeout(() => {
+        void window.api
+          .listProviders()
+          .then((next) => {
+            set({ providers: next })
+            recheck(attempt + 1)
+          })
+          .catch(() => {})
+      }, 15_000)
+    }
+    recheck(1)
 
     // Reflect PTY lifecycle pushed from the main process.
     window.api.onStatus((info) => get().applyStatus(info))
@@ -461,9 +484,11 @@ export const useApp = create<AppState>((set, get) => ({
   persistSnapshot: () => {
     const s = get()
     if (s.restoring) return
-    // Only Claude/Codex tabs carry resumable conversation history worth
-    // restoring; shell/python/script tabs are transient and skipped.
-    const restorable = s.sessions.filter((x) => x.provider === 'claude' || x.provider === 'codex')
+    // Only agent tabs carry resumable conversation history worth restoring;
+    // shell/copilot tabs are transient and skipped.
+    const restorable = s.sessions.filter(
+      (x) => x.provider === 'claude' || x.provider === 'codex' || x.provider === 'antigravity'
+    )
     const tabs: PersistedTab[] = restorable.map((sess) => ({
       provider: sess.provider,
       cwd: sess.cwd,
@@ -691,8 +716,8 @@ export const useApp = create<AppState>((set, get) => ({
     set({ settings })
   },
 
-  addAccount: async (label) => {
-    await window.api.addAccount(label)
+  addAccount: async (label, provider) => {
+    await window.api.addAccount(label, provider)
     await get().refreshSettings()
   },
 
@@ -706,9 +731,25 @@ export const useApp = create<AppState>((set, get) => ({
     set({ settings })
   },
 
-  setCurrentAccount: async (id) => {
-    const settings = await window.api.setCurrentAccount(id)
+  setCurrentAccount: async (id, provider) => {
+    const settings = await window.api.setCurrentAccount(id, provider)
     set({ settings })
+  },
+
+  setRuntimePref: async (provider, pref) => {
+    const current = get().settings?.runtimePrefs ?? {}
+    const settings = await window.api.updateSettings({ runtimePrefs: { ...current, [provider]: pref } })
+    set({ settings })
+    // Availability, the command and the hint all depend on the preference.
+    await get().refreshProviders()
+  },
+
+  refreshProviders: async () => {
+    try {
+      set({ providers: await window.api.listProviders() })
+    } catch (e) {
+      window.api.log('warn', `listProviders failed: ${(e as Error).message}`)
+    }
   },
 
   // ---- Toasts ------------------------------------------------------------------
@@ -831,11 +872,6 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   // ---- Updates -------------------------------------------------------------------
-  setUpdateDir: async (dir) => {
-    const settings = await window.api.updateSettings({ updateDir: dir })
-    set({ settings, update: null })
-  },
-
   setCheckUpdatesOnLaunch: async (enabled) => {
     const settings = await window.api.updateSettings({ checkUpdatesOnLaunch: enabled })
     set({ settings })

@@ -1,5 +1,5 @@
-appId: com.ethanlin.localplatform
-productName: Local Platform
+appId: com.ethanlin.baguette
+productName: baguette
 copyright: Copyright © Ethan Lin
 
 directories:
@@ -19,15 +19,15 @@ extraResources:
   - from: build/icon.ico
     to: icon.ico
 
-# There is no update server. A `generic` provider is declared only so that
-# electron-builder emits latest.yml (version + sha512 of the installer) next
-# to the .exe: main/updater.ts reads that from whatever folder the user points
-# the app at and verifies the installer before running it. The URL is never
-# contacted — nothing in this project ever runs `--publish`, and a generic
-# provider can't be published to anyway.
+# Updates come from this repo's GitHub Releases (main/updater.ts). Declaring
+# the provider makes electron-builder emit latest.yml (version + sha512 of the
+# installer) next to the .exe; .github/workflows/release.yml uploads both to
+# the Release and the app verifies the download against it. Uploading is done
+# by that workflow, not by electron-builder (`--publish never`).
 publish:
-  provider: generic
-  url: http://127.0.0.1/unused-no-update-server
+  provider: github
+  owner: Lucker030
+  repo: baguette
 
 # The only native dependency is node-pty, and its binary is ABI-stable across
 # Node and Electron (verified: the same .node loads under both), so there is
@@ -64,6 +64,10 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  shortcutName: Local Platform
+  shortcutName: baguette
+  # No spaces: GitHub rewrites spaces in uploaded asset names to dots, which
+  # would no longer match the `path:` in latest.yml. updater.ts INSTALLER_RE
+  # matches this name.
+  artifactName: baguette-Setup-${version}.${ext}
   installerIcon: build/icon.ico
   uninstallerIcon: build/icon.ico

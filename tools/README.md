@@ -18,7 +18,7 @@ the Windows 8.3 **short (ASCII) path** instead.
   is missing, then starts Electron through it. This is a *developer*
   convenience. End users no longer need it — `npm run dist` produces a proper
   NSIS installer with Start Menu/desktop shortcuts, which replaced the old
-  `Local Platform.bat`.
+  launcher batch file.
 - `run-node.ps1`, `run-electron.ps1` — same short-path trick for running
   `node`/`electron` ad hoc from a terminal during development.
 

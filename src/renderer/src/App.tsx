@@ -159,7 +159,7 @@ export default function App(): JSX.Element {
   }, [])
 
   return (
-    <ErrorBoundary label="DashBoard" fullscreen>
+    <ErrorBoundary label="baguette" fullscreen>
     <div className="flex h-full w-full bg-bg-base text-txt-base">
       <ErrorBoundary label="側欄">
         <Sidebar />

@@ -1,21 +1,20 @@
 import { useApp } from '../store/sessions'
 import { PROVIDER_UI } from '../providerUi'
 import type { Provider } from '@shared/types'
+import logoUrl from '../assets/baguette.png'
 
 export function EmptyState(): JSX.Element {
   const { providers, providersLoaded, creating, createSession } = useApp()
 
   return (
     <div className="flex h-full w-full flex-col items-center justify-center gap-6 text-center">
-      <div className="grid h-16 w-16 place-items-center rounded-2xl bg-gradient-to-br from-claude to-copilot text-2xl font-bold text-white">
-        D
-      </div>
+      <img src={logoUrl} alt="" className="h-16 w-16 select-none" draggable={false} />
       <div>
-        <h1 className="text-lg font-semibold">歡迎使用 DashBoard</h1>
+        <h1 className="text-lg font-semibold">歡迎使用 baguette</h1>
         <p className="mt-1 text-sm text-txt-dim">選一個供應商開始你的第一個 CLI session</p>
       </div>
       <div className="flex gap-3">
-        {(['claude', 'codex', 'copilot', 'shell'] as Provider[]).map((id) => {
+        {(['claude', 'codex', 'copilot', 'antigravity', 'shell'] as Provider[]).map((id) => {
           const meta = providers.find((p) => p.id === id)
           const ui = PROVIDER_UI[id]
           // Detection is slow (it may probe WSL); don't claim "未偵測到" while

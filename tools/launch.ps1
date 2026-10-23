@@ -1,5 +1,5 @@
 $ErrorActionPreference = 'Stop'
-# One-click launcher for Local Platform. Handles this machine's quirks:
+# One-click launcher for baguette. Handles this machine's quirks:
 #  - CJK user-profile path -> run everything through 8.3 SHORT (ASCII) paths.
 #  - Some shells launch with ComSpec/PATHEXT unset or ELECTRON_RUN_AS_NODE=1;
 #    normalize them (harmless on a normal machine).

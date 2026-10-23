@@ -7,7 +7,7 @@ describe('quoteForShell', () => {
   })
 
   it('quotes a path containing a space', () => {
-    // This is the common case here: the app installs to "…\Local Platform\…".
+    // The common case on Windows: "Program Files", "My Projects", OneDrive.
     expect(quoteForShell('C:\\My Projects\\a.txt')).toBe('"C:\\My Projects\\a.txt"')
   })
 

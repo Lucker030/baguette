@@ -3,14 +3,14 @@ import type { Tray } from 'electron'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { PtyManager } from './pty-manager'
-import { listProviders, warmProviderCache } from './providers'
+import { listProviders, setRuntimePrefs, warmProviderCache } from './providers'
 import { listSkills, createSkill } from './skills'
 import { listHooks, createHook, updateHook, removeHook, setHookEnabled } from './hooks'
 import { getSnapshot, saveSnapshot } from './session-store'
 import { sendToRenderer } from './renderer-bridge'
 import { initLog, log, logDir, logFile } from './log'
 import { appIconPath, createTray } from './tray'
-import { checkForUpdate, installUpdate } from './updater'
+import { checkForUpdate, installUpdate, RELEASES_PAGE } from './updater'
 import {
   addTodos,
   clearDoneTodos,
@@ -38,8 +38,11 @@ import {
   setCurrentAccount,
   getLaunchAtLogin,
   setLaunchAtLogin,
-  resolveClaudeConfigDir
+  resolveClaudeConfigDir,
+  resolveAccountDir,
+  currentAccountFor
 } from './settings'
+import { isAccountProvider, PROVIDERS } from '../shared/types'
 import type {
   AppPaths,
   AppSettings,
@@ -76,8 +79,6 @@ process.on('unhandledRejection', (reason) => {
 })
 
 // ---- Validation of renderer-supplied IPC input ---------------------------------
-const PROVIDERS: Provider[] = ['claude', 'codex', 'copilot', 'shell']
-
 function sanitizeProvider(value: unknown): Provider | null {
   return PROVIDERS.includes(value as Provider) ? (value as Provider) : null
 }
@@ -124,7 +125,7 @@ function createWindow(): void {
     show: false,
     backgroundColor: '#0d1117',
     autoHideMenuBar: true,
-    title: 'DashBoard',
+    title: 'baguette',
     icon: appIconPath(),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -222,14 +223,15 @@ function notifyAttention(sessionId: string, title: string, body: string): void {
   n.show()
 }
 
-// ---- Updates from a folder ----------------------------------------------------
+// ---- Updates from GitHub Releases ---------------------------------------------
+// Six-hourly keeps us far below the unauthenticated GitHub API limit (60/h).
 const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
 
-/** Scan settings.updateDir and tell the renderer if there is something newer. */
-function runUpdateCheck(): UpdateCheckResult {
-  const result = checkForUpdate(getSettings().updateDir, app.getVersion())
+/** Ask GitHub for a newer release and tell the renderer what was found. */
+async function runUpdateCheck(): Promise<UpdateCheckResult> {
+  const result = await checkForUpdate(app.getVersion())
   if (result.error) log.warn(`update check: ${result.error}`)
-  else if (result.latestVersion) log.info(`update available: ${result.latestVersion} at ${result.file}`)
+  else if (result.latestVersion) log.info(`update available: ${result.latestVersion} at ${result.url}`)
   sendToRenderer(mainWindow, 'update:result', result)
   return result
 }
@@ -237,8 +239,7 @@ function runUpdateCheck(): UpdateCheckResult {
 /** A check shortly after launch (so startup isn't slowed) and then periodically. */
 function scheduleUpdateChecks(): void {
   const tick = (): void => {
-    const s = getSettings()
-    if (s.updateDir && s.checkUpdatesOnLaunch) runUpdateCheck()
+    if (getSettings().checkUpdatesOnLaunch) void runUpdateCheck()
   }
   setTimeout(tick, 8000)
   setInterval(tick, UPDATE_CHECK_INTERVAL_MS)
@@ -261,15 +262,25 @@ function registerIpc(): void {
 
   // Settings + Claude accounts
   ipcMain.handle('settings:get', () => getSettings())
-  ipcMain.handle('settings:update', (_e, patch: Partial<AppSettings>) => updateSettings(patch))
+  ipcMain.handle('settings:update', (_e, patch: Partial<AppSettings>) => {
+    const next = updateSettings(patch)
+    setRuntimePrefs(next.runtimePrefs)
+    return next
+  })
   // Read back from the OS every time rather than caching: the user can turn
   // this off in Windows Settings or Task Manager without telling us.
   ipcMain.handle('settings:getLaunchAtLogin', () => getLaunchAtLogin())
   ipcMain.handle('settings:setLaunchAtLogin', (_e, enabled: boolean) => setLaunchAtLogin(enabled))
-  ipcMain.handle('accounts:add', (_e, label: string) => addAccount(label))
+  // `provider` comes from the renderer: anything that isn't a CLI with
+  // account support falls back to Claude, the original (and only) meaning.
+  ipcMain.handle('accounts:add', (_e, label: string, provider?: unknown) =>
+    addAccount(String(label ?? ''), isAccountProvider(provider) ? provider : 'claude')
+  )
   ipcMain.handle('accounts:rename', (_e, id: string, label: string) => renameAccount(id, label))
   ipcMain.handle('accounts:remove', (_e, id: string) => removeAccount(id))
-  ipcMain.handle('accounts:setCurrent', (_e, id: string | null) => setCurrentAccount(id))
+  ipcMain.handle('accounts:setCurrent', (_e, id: string | null, provider?: unknown) =>
+    setCurrentAccount(typeof id === 'string' ? id : null, isAccountProvider(provider) ? provider : 'claude')
+  )
 
   // App housekeeping: where our files are, and a way to get at the log.
   ipcMain.handle(
@@ -282,20 +293,20 @@ function registerIpc(): void {
     })
   )
 
-  // Folder-based updates (see updater.ts). The install call never returns
+  // GitHub Releases updates (see updater.ts). The install call never returns
   // normally on success: the app quits and the installer relaunches it.
   ipcMain.handle('update:check', () => runUpdateCheck())
-  ipcMain.handle('update:install', () => {
-    const result = runUpdateCheck()
+  ipcMain.handle('update:install', async () => {
+    const result = await runUpdateCheck()
     if (!result.latestVersion) throw new Error(result.error ?? '目前已是最新版本')
+    // `quitting` is only set once the download is verified and the installer
+    // is running — a download can take minutes, and closing the window in
+    // that time must still hide to tray rather than quit. installUpdate
+    // rejects (leaving it false) on any failure before the hand-off.
+    await installUpdate(result)
     quitting = true
-    try {
-      installUpdate(result)
-    } catch (e) {
-      quitting = false
-      throw e
-    }
   })
+  ipcMain.handle('update:openReleasePage', () => shell.openExternal(RELEASES_PAGE))
   ipcMain.handle('app:openPath', (_e, target: 'userData' | 'logs') =>
     shell.openPath(target === 'logs' ? logDir() : app.getPath('userData'))
   )
@@ -308,7 +319,7 @@ function registerIpc(): void {
     else log.info(`[renderer] ${text}`)
   })
   ipcMain.on('app:notifyAttention', (_e, sessionId: unknown, title: unknown, body: unknown) =>
-    notifyAttention(String(sessionId ?? ''), String(title ?? 'DashBoard').slice(0, 100), String(body ?? '').slice(0, 200))
+    notifyAttention(String(sessionId ?? ''), String(title ?? 'baguette').slice(0, 100), String(body ?? '').slice(0, 200))
   )
 
   // Hook 庫 (managed hooks mirrored into ~/.claude/settings.json). Input is
@@ -364,7 +375,7 @@ function registerIpc(): void {
   ipcMain.handle('clipboard:readImageAsFile', () => {
     const image = clipboard.readImage()
     if (image.isEmpty()) return null
-    const file = join(app.getPath('temp'), `dashboard-paste-${Date.now()}.png`)
+    const file = join(app.getPath('temp'), `baguette-paste-${Date.now()}.png`)
     try {
       writeFileSync(file, image.toPNG())
       return file
@@ -386,7 +397,11 @@ function registerIpc(): void {
   })
 
   // Sessions
-  ipcMain.handle('session:create', (_e, opts: CreateSessionOptions) => {
+  ipcMain.handle('session:create', async (_e, opts: CreateSessionOptions) => {
+    // ptyManager.create resolves the CLI synchronously; make sure the WSL
+    // probe has an answer first (a cache hit once warm), so a cold WSL can't
+    // turn into "找不到 claude" through the short synchronous fallback.
+    await warmProviderCache()
     // Everything here arrives from the renderer, so rebuild the options from
     // known-good fields rather than spreading them. `command`/`commandArgs`
     // are filled in here from the resolved provider, never taken from the
@@ -407,6 +422,21 @@ function registerIpc(): void {
     }
     if (provider === 'claude') {
       enriched.claudeConfigDir = resolveClaudeConfigDir(enriched.accountId ?? settings.currentAccountId)
+    } else if (isAccountProvider(provider)) {
+      // 'default' explicitly asks for the CLI's own default dir (the accounts
+      // screen's 登入 on that row). Any other id that isn't this CLI's (e.g.
+      // the selected group's Claude account) resolves to undefined, so fall
+      // back to this CLI's current account.
+      const dir =
+        enriched.accountId === 'default'
+          ? undefined
+          : (resolveAccountDir(provider, enriched.accountId) ??
+            resolveAccountDir(provider, currentAccountFor(provider)))
+      enriched.accountDir = dir
+      // Record which account the tab really runs under, so a restore reuses it.
+      enriched.accountId = dir
+        ? settings.accounts.find((a) => a.provider === provider && a.configDir === dir)?.id
+        : undefined
     }
     const info = ptyManager.create(enriched)
     if (info.status === 'error') log.warn(`session ${info.id} (${provider}) failed to start: ${info.message}`)
@@ -424,7 +454,10 @@ function registerIpc(): void {
   ipcMain.on('session:kill', (_e, id: string) => ptyManager.kill(id))
   // Re-spawn in place (same tab, resumed conversation) — the manual twin of
   // the automatic restart after another tab's login.
-  ipcMain.handle('session:restart', (_e, id: string) => ptyManager.restart(String(id)))
+  ipcMain.handle('session:restart', async (_e, id: string) => {
+    await warmProviderCache()
+    return ptyManager.restart(String(id))
+  })
 
   // Open-tab snapshot (persisted across app restarts; see session-store.ts).
   ipcMain.handle('sessions:getSnapshot', () => getSnapshot())
@@ -448,10 +481,14 @@ if (!app.requestSingleInstanceLock()) {
 
   // Windows groups taskbar buttons and attributes toast notifications by this
   // id; the NSIS installer registers the same one for the shortcut.
-  app.setAppUserModelId('com.ethanlin.localplatform')
+  app.setAppUserModelId('com.ethanlin.baguette')
 
   app.whenReady().then(() => {
-    log.info(`DashBoard ${app.getVersion()} starting (electron ${process.versions.electron})`)
+    log.info(`baguette ${app.getVersion()} starting (electron ${process.versions.electron})`)
+    // Start the (cold, multi-second) WSL probes now, while the window loads,
+    // rather than when the renderer first asks.
+    setRuntimePrefs(getSettings().runtimePrefs)
+    void warmProviderCache()
     registerIpc()
     wirePtyEvents()
     // A Claude session edits todos.json directly (see the daily-todos skill),

@@ -3,7 +3,7 @@
 <img src="build/icon-preview.png" alt="baguette icon" width="96" align="right">
 
 An Electron desktop app that multiplexes CLI AI agent sessions — Claude Code,
-ChatGPT (Codex CLI), Copilot and a plain shell — into one tabbed terminal UI,
+Codex, Copilot, Antigravity (`agy`) and a plain shell — into one tabbed terminal UI,
 with libraries for Skills, hooks, daily to-dos and a knowledge base.
 
 ## Features
@@ -28,15 +28,16 @@ with libraries for Skills, hooks, daily to-dos and a knowledge base.
 - **System tray** — closing the window hides it to the tray by default and
   every session keeps running; quit from the tray menu. Can be turned off in
   設定, after which ✕ ends all sessions as before.
-- **Updates from a folder** — there is no update server, but 設定 → 更新 takes a
-  folder (local or a network share). The app scans it after launch and every
-  six hours for a newer `Local Platform Setup <ver>.exe`, shows a 「新版本」
-  badge and a toast, and 「安裝並重新啟動」 copies the installer locally,
-  verifies its sha512 against the `latest.yml` electron-builder writes next
-  to it, runs it silently with the same flags electron-updater uses
-  (`/S --updated --force-run`), and the installer relaunches the app. Drop
-  each new build's `.exe` + `latest.yml` into that folder and every machine
-  pointed at it updates itself. See `src/main/updater.ts`.
+- **Updates from GitHub Releases** — after launch and every six hours the app
+  asks the GitHub API for the latest Release of
+  [Lucker030/baguette](https://github.com/Lucker030/baguette/releases). If it
+  carries a newer `baguette-Setup-<ver>.exe` the app shows a toast, and 設定 →
+  更新 「下載安裝並重新啟動」 downloads it, verifies its sha512 against the
+  Release's `latest.yml`, runs it silently with the same flags
+  electron-updater uses (`/S --updated --force-run`), and the installer
+  relaunches the app. Pushing a `v*` tag runs `.github/workflows/release.yml`,
+  which builds and publishes exactly those two files. See
+  `src/main/updater.ts`.
 - **Crash resilience and a log** — each screen sits in its own React error
   boundary so one broken panel cannot blank the terminals; main-process
   exceptions are caught, logged to `userData/logs/main.log` (opened from 設定)
@@ -105,12 +106,18 @@ npm run dist       # build + package a Windows installer into release/
 
 ## Installing
 
-`npm run dist` produces `release/Local Platform Setup <version>.exe`, an NSIS
+`npm run dist` produces `release/baguette-Setup-<version>.exe`, an NSIS
 installer, plus `latest.yml` beside it. It installs per-user (no admin prompt,
 lands in `%LOCALAPPDATA%`) and creates Start Menu and desktop shortcuts, so
 the app launches like any other Windows program — there is no batch file to
-double-click any more. To ship an update, copy the `.exe` and `latest.yml`
-into whatever folder the installed apps have in 設定 → 更新.
+double-click any more. New sessions start in the folder the app's `.exe` is
+in until a different 預設工作目錄 is set in 設定.
+
+To ship an update: bump `version` in `package.json`, commit, then
+`git tag v<version> && git push origin v<version>`. The Release workflow
+refuses a tag that disagrees with `package.json`, builds the installer, and
+publishes it with `latest.yml`; installed copies pick it up on their next
+check.
 
 Two packaging details worth knowing before changing `electron-builder.yml`:
 
@@ -156,8 +163,9 @@ logic where a silent bug would be most damaging:
   per line, and rotates at 1 MB.
 - `src/main/auth-watch.test.ts` — the "this tab needs a login" classifier,
   against the phrases Claude Code 2.1.x actually prints.
-- `src/main/updater.test.ts` — which installer in the update folder gets
-  offered, and when the sha512 from `latest.yml` is trusted.
+- `src/main/updater.test.ts` — which GitHub Release asset gets offered, when
+  the sha512 from `latest.yml` is trusted, and that network/HTTP failures
+  become a message rather than a throw.
 - `src/main/skills.test.ts` — the hand-rolled SKILL.md frontmatter parser.
 - `src/main/session-store.test.ts` — tolerating a corrupt/stale `sessions.json`.
 - `src/main/renderer-bridge.test.ts` — not touching a destroyed window.

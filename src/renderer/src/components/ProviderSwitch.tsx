@@ -3,11 +3,13 @@ import { useApp } from '../store/sessions'
 import { PROVIDER_UI } from '../providerUi'
 import type { Provider } from '@shared/types'
 
-const ORDER: Provider[] = ['claude', 'codex', 'copilot', 'shell']
+const ORDER: Provider[] = ['claude', 'codex', 'copilot', 'antigravity', 'shell']
 
 // Providers whose CLI keeps a resumable conversation history, so the split
-// button's ▾ menu can offer 繼續上一次 / 選擇存檔… as well as 新開對話.
-const RESUMABLE: Provider[] = ['claude', 'codex']
+// button's ▾ menu can offer 繼續上一次 (and, where the CLI has a picker,
+// 選擇存檔…) as well as 新開對話.
+const RESUMABLE: Provider[] = ['claude', 'codex', 'antigravity']
+const PICKABLE: Provider[] = ['claude', 'codex']
 
 /**
  * Launches a new CLI session with the chosen AI provider. Switching provider
@@ -41,7 +43,7 @@ export function ProviderSwitch(): JSX.Element {
                   !providersLoaded
                     ? '正在偵測已安裝的 CLI…'
                     : available
-                      ? `啟動 ${ui.label} CLI（${meta?.command}）`
+                      ? `啟動 ${ui.label}（${meta?.runtime === 'wsl' ? 'WSL 版' : `Windows 版：${meta?.command}`}）`
                       : meta?.hint
                 }
                 onClick={() => void createSession(id)}
@@ -87,14 +89,16 @@ export function ProviderSwitch(): JSX.Element {
                         void continueSession(id)
                       }}
                     />
-                    <MenuItem
-                      label="選擇存檔…"
-                      hint={id === 'codex' ? '開 codex 內建存檔挑選器' : '開 claude 內建存檔挑選器'}
-                      onClick={() => {
-                        setOpenMenu(null)
-                        void pickSession(id)
-                      }}
-                    />
+                    {PICKABLE.includes(id) && (
+                      <MenuItem
+                        label="選擇存檔…"
+                        hint={id === 'codex' ? '開 codex 內建存檔挑選器' : '開 claude 內建存檔挑選器'}
+                        onClick={() => {
+                          setOpenMenu(null)
+                          void pickSession(id)
+                        }}
+                      />
+                    )}
                   </div>
                 </>
               )}

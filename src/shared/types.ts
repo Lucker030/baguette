@@ -1,6 +1,23 @@
 // Shared types used by both the main and renderer processes.
 
-export type Provider = 'claude' | 'codex' | 'copilot' | 'shell'
+export type Provider = 'claude' | 'codex' | 'copilot' | 'antigravity' | 'shell'
+
+export const PROVIDERS: Provider[] = ['claude', 'codex', 'copilot', 'antigravity', 'shell']
+
+/** Where a session's process runs: a native Windows install, or inside WSL. */
+export type Runtime = 'windows' | 'wsl'
+
+/**
+ * Which install a provider uses when it can run both ways.
+ * - `auto`    Windows if installed there, else WSL (the default)
+ * - `windows` Windows only — unavailable if there is no Windows install
+ * - `wsl`     WSL only — unavailable if WSL doesn't have it
+ */
+export type RuntimePref = 'auto' | 'windows' | 'wsl'
+
+export function isRuntimePref(v: unknown): v is RuntimePref {
+  return v === 'auto' || v === 'windows' || v === 'wsl'
+}
 
 export type SessionStatus = 'starting' | 'running' | 'exited' | 'error'
 
@@ -30,6 +47,8 @@ export interface CreateSessionOptions {
   accountId?: string
   /** Resolved by the main process; injected as CLAUDE_CONFIG_DIR for claude. */
   claudeConfigDir?: string
+  /** Resolved by the main process; injected as CODEX_HOME / COPILOT_HOME for those CLIs. */
+  accountDir?: string
   /** Explicit command override; main-filled only, never accepted from the renderer. */
   command?: string
   commandArgs?: string[]
@@ -49,21 +68,55 @@ export interface LoginUrlEvent {
   url: string
 }
 
-/** A named Claude account = an isolated CLAUDE_CONFIG_DIR (config + credentials). */
+/**
+ * Providers that support switching between named accounts, and the env var
+ * each CLI reads its config + credentials directory from. CODEX_HOME verified
+ * against codex-cli 0.163.0: pointed at an empty folder, `codex login status`
+ * says "Not logged in" while the default dir is logged in. COPILOT_HOME
+ * verified against Copilot CLI 1.0.103 in WSL: config.json, logs and
+ * session-state all land in it and ~/.copilot is never created (whether the
+ * sign-in follows it was not testable — that copilot had never signed in). Antigravity (`agy`)
+ * is deliberately absent. Verified: it keys its config off USERPROFILE
+ * (`~/.gemini`), but its sign-in is one fixed Windows Credential Manager entry
+ * (`gemini:antigravity`) — run with an empty USERPROFILE it is still signed
+ * in — so a per-account folder would not change which account it uses.
+ */
+export const ACCOUNT_PROVIDERS = ['claude', 'codex', 'copilot'] as const
+export type AccountProvider = (typeof ACCOUNT_PROVIDERS)[number]
+
+export const ACCOUNT_DIR_ENV: Record<AccountProvider, string> = {
+  claude: 'CLAUDE_CONFIG_DIR',
+  codex: 'CODEX_HOME',
+  copilot: 'COPILOT_HOME'
+}
+
+export function isAccountProvider(p: unknown): p is AccountProvider {
+  return (ACCOUNT_PROVIDERS as readonly unknown[]).includes(p)
+}
+
+/** A named account of one CLI = an isolated config dir (config + credentials). */
 export interface Account {
   id: string
   label: string
-  /** Absolute path used as CLAUDE_CONFIG_DIR for sessions on this account. */
+  /** Which CLI this account belongs to. Accounts saved before this field existed are Claude's. */
+  provider: AccountProvider
+  /** Absolute path handed to the CLI through ACCOUNT_DIR_ENV[provider]. */
   configDir: string
 }
 
 export interface AppSettings {
   /** Default working directory for new sessions. */
   defaultCwd: string
-  /** Extra Claude accounts (the built-in `~/.claude` default is implicit). */
+  /** Extra accounts of every CLI (each CLI's own default dir is implicit). */
   accounts: Account[]
-  /** Currently selected account id, or null for the built-in default. */
+  /** Currently selected Claude account id, or null for the built-in default. */
   currentAccountId: string | null
+  /**
+   * Currently selected account for the other CLIs in ACCOUNT_PROVIDERS;
+   * missing/null = that CLI's default config dir. (Claude keeps using
+   * currentAccountId, which groups and older settings files already rely on.)
+   */
+  currentAccounts: Partial<Record<AccountProvider, string | null>>
   /** Named sidebar groups for organizing sessions (names persist; sessions don't). */
   groups: SessionGroup[]
   /** Reopen the previous session tabs (auto-continue each) on app launch. */
@@ -77,27 +130,29 @@ export interface AppSettings {
   notifyOnAttention: boolean
   /** xterm font size in px, shared by every terminal. */
   terminalFontSize: number
-  /**
-   * Folder the app looks in for a newer `Local Platform Setup <ver>.exe`
-   * — a local path or a network share. Empty string = update checks off.
-   * There is no online feed; this is the whole "update server".
-   */
-  updateDir: string
-  /** Check `updateDir` shortly after launch and every few hours after that. */
+  /** Check GitHub Releases shortly after launch and every few hours after that. */
   checkUpdatesOnLaunch: boolean
+  /** Windows-vs-WSL choice per provider; missing = 'auto'. */
+  runtimePrefs: Partial<Record<Provider, RuntimePref>>
 }
 
-/** Outcome of scanning `updateDir` — see main/updater.ts. */
+/** Outcome of asking GitHub Releases for a newer build — see main/updater.ts. */
 export interface UpdateCheckResult {
   currentVersion: string
-  /** Newest installer version found that is greater than currentVersion, else null. */
+  /** Version of the newest release installer if it is greater than currentVersion, else null. */
   latestVersion: string | null
-  /** Absolute path of that installer, when there is one. */
-  file: string | null
-  /** base64 sha512 from latest.yml when the folder has one, for verifying the copy. */
+  /** Download URL of that installer, when there is one. */
+  url: string | null
+  /** Asset name of that installer (`baguette-Setup-<ver>.exe`). */
+  fileName: string | null
+  /** Size GitHub lists for the asset, checked against the download. */
+  size: number | null
+  /** base64 sha512 from the release's latest.yml, for verifying the download. */
   sha512: string | null
+  /** The Release page, for a "see what's new" link. */
+  releaseUrl: string
   checkedAt: number
-  /** Why the check could not complete (folder missing, unreadable...). */
+  /** Why the check could not complete (offline, rate-limited, no release yet...). */
   error?: string
 }
 
@@ -214,11 +269,19 @@ export interface SessionSnapshot {
 export interface ProviderMeta {
   id: Provider
   label: string
-  /** Whether the backing CLI/binary was detected on this machine. */
+  /** Whether a new session can start under the current runtime preference. */
   available: boolean
-  /** Resolved command path, when detected. */
+  /** Resolved command path, when detected (wsl.exe for a WSL launch). */
   command?: string
   hint?: string
+  /** Which install a new session would use, when available. */
+  runtime?: Runtime
+  /** The Windows install found, if any (regardless of preference). */
+  windowsCommand?: string
+  /** Whether WSL has it: true/false, or null while that is not known yet. */
+  wslAvailable: boolean | null
+  /** The preference in effect. */
+  pref: RuntimePref
 }
 
 export interface SkillInfo {

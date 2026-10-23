@@ -17,17 +17,18 @@ function settings(overrides: Partial<AppSettings> = {}): AppSettings {
   return {
     defaultCwd: 'C:\\default',
     accounts: [
-      { id: 'work', label: 'Work', configDir: 'C:\\acc\\work' },
-      { id: 'personal', label: 'Personal', configDir: 'C:\\acc\\personal' }
+      { id: 'work', label: 'Work', provider: 'claude', configDir: 'C:\\acc\\work' },
+      { id: 'personal', label: 'Personal', provider: 'claude', configDir: 'C:\\acc\\personal' }
     ],
     currentAccountId: null,
+    currentAccounts: {},
     groups: [],
     restoreTabs: false,
     closeToTray: true,
     notifyOnAttention: true,
     terminalFontSize: 13,
-    updateDir: '',
     checkUpdatesOnLaunch: true,
+    runtimePrefs: {},
     ...overrides
   }
 }
