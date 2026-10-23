@@ -150,7 +150,7 @@ export function SettingsPanel(): JSX.Element {
             <span>
               <span className="block text-sm font-medium">重新開啟時還原上次的分頁</span>
               <span className="mt-1 block text-xs text-txt-dim">
-                下次啟動 App 時，自動開回上次的 Claude／ChatGPT 分頁與群組，並各自續聊之前的對話。Shell／Python
+                下次啟動 App 時，自動開回上次的 Claude／ChatGPT 分頁與群組，並各自續聊之前的對話。Shell
                 等臨時分頁不會還原。ChatGPT（Codex）同一資料夾的多個分頁只能還原到最近一次對話。
               </span>
             </span>

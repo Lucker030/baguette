@@ -306,7 +306,7 @@ export class PtyManager extends EventEmitter {
       this.pushOutput(
         session,
         id,
-        `\x1b[2m[DashBoard] ${bannerLabel} 啟動方式：${mode}${acctPart}${launchLabel(launch)}\x1b[0m\r\n`
+        `\x1b[2m[baguette] ${bannerLabel} 啟動方式：${mode}${acctPart}${launchLabel(launch)}\x1b[0m\r\n`
       )
     }
 
@@ -468,7 +468,7 @@ export class PtyManager extends EventEmitter {
       : session.launch.kind === 'new'
         ? { kind: 'new' }
         : { kind: 'continue' }
-    this.pushOutput(session, id, `\r\n\x1b[2m[DashBoard] ${why}…\x1b[0m\r\n`)
+    this.pushOutput(session, id, `\r\n\x1b[2m[baguette] ${why}…\x1b[0m\r\n`)
     this.launch(session, launch, session.lastSize ?? {})
     this.emit('status', session.info)
     return session.info

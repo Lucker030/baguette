@@ -124,7 +124,7 @@ function createWindow(): void {
     show: false,
     backgroundColor: '#0d1117',
     autoHideMenuBar: true,
-    title: 'DashBoard',
+    title: 'baguette',
     icon: appIconPath(),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -308,7 +308,7 @@ function registerIpc(): void {
     else log.info(`[renderer] ${text}`)
   })
   ipcMain.on('app:notifyAttention', (_e, sessionId: unknown, title: unknown, body: unknown) =>
-    notifyAttention(String(sessionId ?? ''), String(title ?? 'DashBoard').slice(0, 100), String(body ?? '').slice(0, 200))
+    notifyAttention(String(sessionId ?? ''), String(title ?? 'baguette').slice(0, 100), String(body ?? '').slice(0, 200))
   )
 
   // Hook 庫 (managed hooks mirrored into ~/.claude/settings.json). Input is
@@ -451,7 +451,7 @@ if (!app.requestSingleInstanceLock()) {
   app.setAppUserModelId('com.ethanlin.localplatform')
 
   app.whenReady().then(() => {
-    log.info(`DashBoard ${app.getVersion()} starting (electron ${process.versions.electron})`)
+    log.info(`baguette ${app.getVersion()} starting (electron ${process.versions.electron})`)
     registerIpc()
     wirePtyEvents()
     // A Claude session edits todos.json directly (see the daily-todos skill),

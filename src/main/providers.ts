@@ -128,7 +128,12 @@ function wslHasCmdAsync(cmd: string): Promise<boolean> {
     execFile(
       wsl,
       ['--', 'bash', '-lic', `command -v ${cmd}`],
-      { timeout: 5000, windowsHide: true },
+      // 20 s, not 5: this runs once at launch, and the first wsl.exe call after
+      // boot has to start the distro's VM, which on a fresh machine easily
+      // takes longer than 5 s. A timeout is cached as "not installed" for the
+      // whole run, so a short cap made claude/codex show as 未偵測到 until
+      // the app was restarted. Being async, the longer wait blocks nothing.
+      { timeout: 20000, windowsHide: true },
       (err) => resolve((wslCmdCache[cmd] = !err))
     )
   })

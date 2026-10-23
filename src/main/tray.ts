@@ -25,10 +25,10 @@ export function createTray(handlers: { onShow: () => void; onQuit: () => void })
     // close-to-tray would strand a hidden window, and index.ts checks for that.
     return null
   }
-  tray.setToolTip('DashBoard')
+  tray.setToolTip('baguette')
   tray.setContextMenu(
     Menu.buildFromTemplate([
-      { label: '顯示 DashBoard', click: handlers.onShow },
+      { label: '顯示 baguette', click: handlers.onShow },
       { type: 'separator' },
       { label: '結束（會關閉所有 session）', click: handlers.onQuit }
     ])

@@ -247,6 +247,8 @@ function schedulesDir(): string {
   return dir
 }
 
+// Still the pre-rename "DashBoard_" prefix on purpose: Windows Scheduled Tasks
+// already created under this name must keep being found, updated and removed.
 function scheduleTaskName(hookId: string): string {
   return `DashBoard_Hook_${hookId}`
 }

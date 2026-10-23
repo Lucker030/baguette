@@ -6,6 +6,7 @@ import { AccountSelect } from './sidebar/AccountSelect'
 import { AddonNav } from './sidebar/AddonNav'
 import { GroupHeader, type Bucket } from './sidebar/GroupHeader'
 import { SessionRow } from './sidebar/SessionRow'
+import breadIcon from '../assets/baguette.png'
 
 export function Sidebar(): JSX.Element {
   const {
@@ -75,10 +76,8 @@ export function Sidebar(): JSX.Element {
   return (
     <aside className="flex w-60 shrink-0 flex-col border-r border-line bg-bg-panel">
       <div className="flex items-center gap-2 px-4 py-3.5">
-        <div className="grid h-7 w-7 place-items-center rounded-md bg-gradient-to-br from-claude to-copilot text-sm font-bold text-white">
-          D
-        </div>
-        <div className="text-sm font-semibold tracking-wide">DashBoard</div>
+        <img src={breadIcon} alt="" className="h-7 w-7" draggable={false} />
+        <div className="text-sm font-semibold tracking-wide">baguette</div>
       </div>
 
       <div className="flex items-center justify-between px-3 pb-1 pt-2">
