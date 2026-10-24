@@ -39,6 +39,21 @@ const SEARCH_DECORATIONS = {
   activeMatchColorOverviewRuler: '#e3b341'
 }
 
+/**
+ * Fit, but only while the terminal is actually laid out.
+ *
+ * Inactive tabs sit under a `display: none` wrapper (App.tsx), and FitAddon
+ * does not bail out there: it measures the hidden parent and proposes a
+ * garbage size (9x4 seen on a tab that went to the background ~80ms after it
+ * mounted), which then reaches the pty and reflows the CLI into a sliver.
+ * A non-rendered element has no client box, so that is the test.
+ */
+function fitIfShown(host: HTMLElement | null, fit: FitAddon | null): boolean {
+  if (!host || !fit || host.clientWidth === 0 || host.clientHeight === 0) return false
+  fit.fit()
+  return true
+}
+
 export function TerminalView({ id, active }: { id: string; active: boolean }): JSX.Element {
   const hostRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
@@ -79,8 +94,9 @@ export function TerminalView({ id, active }: { id: string; active: boolean }): J
     // setWindowOpenHandler, which only lets http(s) reach the OS browser.
     term.loadAddon(new WebLinksAddon((_e, uri) => window.open(uri, '_blank')))
     term.open(host)
+    let shownAtMount = false
     try {
-      fit.fit()
+      shownAtMount = fitIfShown(host, fit)
     } catch {
       /* not visible yet */
     }
@@ -242,8 +258,12 @@ export function TerminalView({ id, active }: { id: string; active: boolean }): J
       window.api.resizeSession(id, cols, rows)
     }
 
-    sentRef.current = { cols: term.cols, rows: term.rows }
-    window.api.resizeSession(id, term.cols, term.rows)
+    // Mounted hidden (opened in the background): leave the pty at its spawn
+    // size; the observer below pushes the real one the first time it shows.
+    if (shownAtMount) {
+      sentRef.current = { cols: term.cols, rows: term.rows }
+      window.api.resizeSession(id, term.cols, term.rows)
+    }
 
     // The custom font is the reason to wait: xterm measures character width at
     // open() time, so if 'Cascadia Code' is still loading it measures the
@@ -252,8 +272,7 @@ export function TerminalView({ id, active }: { id: string; active: boolean }): J
     void document.fonts?.ready.then(() => {
       if (!termRef.current) return
       try {
-        fit.fit()
-        pushSize()
+        if (fitIfShown(host, fit)) pushSize()
       } catch {
         /* not visible yet */
       }
@@ -271,15 +290,17 @@ export function TerminalView({ id, active }: { id: string; active: boolean }): J
     // and takes height away again). Only the box it settles on is worth telling
     // the pty about; the intermediate ones just make the CLI repaint into a
     // width it is about to lose.
+    //
+    // Being hidden also cancels a fit still waiting on the debounce: run after
+    // the tab went to the background, it would measure the hidden box.
     let roTimer: number | undefined
     const ro = new ResizeObserver(([entry]) => {
       const { width, height } = entry?.contentRect ?? { width: 0, height: 0 }
-      if (width === 0 || height === 0) return
       window.clearTimeout(roTimer)
+      if (width === 0 || height === 0) return
       roTimer = window.setTimeout(() => {
         try {
-          fit.fit()
-          pushSize()
+          if (fitIfShown(host, fit)) pushSize()
         } catch {
           /* ignore */
         }
@@ -311,7 +332,8 @@ export function TerminalView({ id, active }: { id: string; active: boolean }): J
     if (!term || term.options.fontSize === fontSize) return
     term.options.fontSize = fontSize
     try {
-      fitRef.current?.fit()
+      // Hidden tabs refit when they are next shown (the observer sees the new box).
+      if (!fitIfShown(hostRef.current, fitRef.current)) return
       const { cols, rows } = term
       if (cols > 0 && rows > 0 && (sentRef.current.cols !== cols || sentRef.current.rows !== rows)) {
         sentRef.current = { cols, rows }
@@ -327,9 +349,8 @@ export function TerminalView({ id, active }: { id: string; active: boolean }): J
     if (!active) return
     const raf = requestAnimationFrame(() => {
       try {
-        fitRef.current?.fit()
         const t = termRef.current
-        if (t) {
+        if (t && fitIfShown(hostRef.current, fitRef.current)) {
           // Same dedupe as the observer: becoming active usually settles on the
           // size this terminal already had, and re-announcing it would make the
           // CLI repaint for nothing every time you switch tabs.
