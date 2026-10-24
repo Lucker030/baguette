@@ -21,7 +21,8 @@
     "dist": "electron-vite build && electron-builder"
   },
   "dependencies": {
-    "@homebridge/node-pty-prebuilt-multiarch": "^0.14.1"
+    "@homebridge/node-pty-prebuilt-multiarch": "^0.14.1",
+    "@xterm/headless": "^5.5.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

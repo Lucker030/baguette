@@ -1,8 +1,11 @@
 import { app, BrowserWindow, ipcMain, shell, dialog, clipboard, Notification, nativeImage } from 'electron'
 import type { Tray } from 'electron'
 import { writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { PtyManager } from './pty-manager'
+import { AgentBridge } from './agent-bridge'
+import type { OpenTabRequest } from './agent-bridge'
 import { listProviders, setRuntimePrefs, warmProviderCache } from './providers'
 import { listSkills, createSkill } from './skills'
 import { listHooks, createHook, updateHook, removeHook, setHookEnabled } from './hooks'
@@ -57,6 +60,65 @@ import type {
 
 const ptyManager = new PtyManager()
 let mainWindow: BrowserWindow | null = null
+let agentBridge: AgentBridge | null = null
+
+// The bridge's server is up within a second of launch, well before the
+// renderer has subscribed to 'bridge:openTab' — a request sent then is simply
+// lost (verified: it timed out). It also must not mount a terminal before the
+// window has laid out and the font has loaded, or the tab starts at a garbage
+// size. The renderer says 'bridge:ready' once both are true; requests wait.
+let markBridgeReady: () => void = () => {}
+const bridgeReady = new Promise<void>((resolve) => (markBridgeReady = resolve))
+
+/**
+ * Have the renderer open a tab the same way its own buttons do — so the new
+ * tab gets a sidebar entry, a group, a pane and a place in the saved
+ * snapshot — and hand back the session id it got.
+ */
+async function openTabViaRenderer(req: OpenTabRequest): Promise<string> {
+  const ready = await Promise.race([bridgeReady.then(() => true), sleepMs(60_000).then(() => false)])
+  if (!ready) throw new Error('baguette 的畫面還沒準備好（視窗是否開著？）')
+  return new Promise((resolve, reject) => {
+    const reqId = randomUUID()
+    const done = (): void => {
+      clearTimeout(timer)
+      ipcMain.removeListener('bridge:openTab:result', onResult)
+    }
+    const onResult = (_e: unknown, r: { reqId?: unknown; id?: unknown; error?: unknown }): void => {
+      if (r?.reqId !== reqId) return
+      done()
+      if (typeof r.id === 'string') resolve(r.id)
+      else reject(new Error(typeof r.error === 'string' ? r.error : '畫面沒有開出分頁'))
+    }
+    const timer = setTimeout(() => {
+      done()
+      reject(new Error('畫面 30 秒內沒有回應（視窗是否開著？）'))
+    }, 30_000)
+    ipcMain.on('bridge:openTab:result', onResult)
+    sendToRenderer(mainWindow, 'bridge:openTab', { reqId, ...req })
+  })
+}
+
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms))
+}
+
+/** Start or stop the bridge's server to match settings.agentBridge. */
+function syncAgentBridge(): void {
+  if (!agentBridge) {
+    agentBridge = new AgentBridge({
+      pty: ptyManager,
+      openTab: openTabViaRenderer,
+      closeTab: (id) => sendToRenderer(mainWindow, 'bridge:closeTab', { id }),
+      infoFile: join(app.getPath('userData'), 'agent-bridge.json')
+    })
+  }
+  if (getSettings().agentBridge) {
+    agentBridge.start().catch((e) => log.error(`agent bridge failed to start: ${(e as Error).message}`))
+  } else {
+    agentBridge.stop()
+  }
+}
 let tray: Tray | null = null
 /** Set once quitting has begun, so the close handler stops hiding to tray. */
 let quitting = false
@@ -265,6 +327,7 @@ function registerIpc(): void {
   ipcMain.handle('settings:update', (_e, patch: Partial<AppSettings>) => {
     const next = updateSettings(patch)
     setRuntimePrefs(next.runtimePrefs)
+    if (typeof patch?.agentBridge === 'boolean') syncAgentBridge()
     return next
   })
   // Read back from the OS every time rather than caching: the user can turn
@@ -417,6 +480,7 @@ function registerIpc(): void {
       accountId: typeof opts?.accountId === 'string' ? opts.accountId : undefined,
       autoOpenLoginUrl: opts?.autoOpenLoginUrl === true,
       launch: sanitizeLaunch(opts?.launch),
+      readOnly: opts?.readOnly === true,
       cols: typeof opts?.cols === 'number' ? opts.cols : undefined,
       rows: typeof opts?.rows === 'number' ? opts.rows : undefined
     }
@@ -451,7 +515,11 @@ function registerIpc(): void {
   ipcMain.on('session:resize', (_e, id: string, cols: number, rows: number) =>
     ptyManager.resize(id, cols, rows)
   )
-  ipcMain.on('session:kill', (_e, id: string) => ptyManager.kill(id))
+  ipcMain.on('bridge:ready', () => markBridgeReady())
+  ipcMain.on('session:kill', (_e, id: string) => {
+    ptyManager.kill(id)
+    agentBridge?.forget(id)
+  })
   // Re-spawn in place (same tab, resumed conversation) — the manual twin of
   // the automatic restart after another tab's login.
   ipcMain.handle('session:restart', async (_e, id: string) => {
@@ -491,6 +559,7 @@ if (!app.requestSingleInstanceLock()) {
     void warmProviderCache()
     registerIpc()
     wirePtyEvents()
+    syncAgentBridge()
     // A Claude session edits todos.json directly (see the daily-todos skill),
     // so the panel follows the file rather than only its own writes.
     watchTodos(() => sendToRenderer(mainWindow, 'todos:changed', listTodos()))
@@ -524,6 +593,7 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   quitting = true
+  agentBridge?.stop()
   ptyManager.killAll()
   log.info('quitting')
 })

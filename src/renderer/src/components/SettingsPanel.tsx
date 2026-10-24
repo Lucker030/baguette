@@ -52,6 +52,7 @@ export function SettingsPanel(): JSX.Element {
     pickNextCwd,
     setRestoreTabs,
     setCloseToTray,
+    setAgentBridge,
     setNotifyOnAttention,
     terminalFontSize,
     setTerminalFontSize,
@@ -184,6 +185,12 @@ export function SettingsPanel(): JSX.Element {
               hint="沒在看的分頁跑完、等確認或響鈴時，跳 Windows 通知並閃工作列。"
               checked={settings?.notifyOnAttention ?? true}
               onChange={(v) => void setNotifyOnAttention(v)}
+            />
+            <Toggle
+              label="允許 AI 開分頁跟其他 AI 對話"
+              hint="開一個本機介面（只限這台電腦、需要 token），讓 AI 開出唯讀的 🤖 分頁並在裡面打字，你可以在旁邊看。只能操作它自己開的分頁。"
+              checked={settings?.agentBridge ?? true}
+              onChange={(v) => void setAgentBridge(v)}
             />
             <Toggle
               label="開機時自動啟動"

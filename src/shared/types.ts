@@ -35,6 +35,18 @@ export type SessionLaunch =
   | { kind: 'pick' }
   | { kind: 'resume'; sessionId: string }
 
+/** main → renderer: open a tab on behalf of the agent bridge (see main/agent-bridge.ts). */
+export interface BridgeOpenTabRequest {
+  reqId: string
+  provider: Provider
+  name?: string
+  cwd?: string
+  accountId?: string
+  readOnly: boolean
+  /** Switch to the new tab (the point is usually to watch it). */
+  focus: boolean
+}
+
 export interface CreateSessionOptions {
   provider: Provider
   cwd?: string
@@ -54,6 +66,11 @@ export interface CreateSessionOptions {
   commandArgs?: string[]
   /** How to hook into the CLI's conversation history. Defaults to `{kind:'new'}`. */
   launch?: SessionLaunch
+  /**
+   * Start the CLI unable to change anything (plan mode / read-only sandbox).
+   * Set for tabs opened by another agent through the agent bridge.
+   */
+  readOnly?: boolean
   /**
    * Login flow only: scan early output for a Claude login URL and open it
    * directly via Electron's shell.openExternal instead of relying on the
@@ -128,6 +145,11 @@ export interface AppSettings {
   closeToTray: boolean
   /** Show a Windows notification when a background session needs attention. */
   notifyOnAttention: boolean
+  /**
+   * Run the local agent bridge (agent-bridge.ts): lets an AI open another CLI
+   * as a visible, read-only tab and talk to it while the user watches.
+   */
+  agentBridge: boolean
   /** xterm font size in px, shared by every terminal. */
   terminalFontSize: number
   /** Check GitHub Releases shortly after launch and every few hours after that. */
@@ -235,6 +257,12 @@ export interface SessionInfo {
    * another tab's login refreshed the account's credentials file.
    */
   authState?: 'needsLogin'
+  /**
+   * Started read-only (an agent-bridge tab). Never written to the restore
+   * snapshot: reopened on the next launch it would come back as an ordinary,
+   * writable tab that no bridge caller controls.
+   */
+  readOnly?: boolean
 }
 
 /** Tabs the app restarted because another tab's login refreshed their account. */

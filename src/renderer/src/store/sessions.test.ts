@@ -26,6 +26,7 @@ function settings(overrides: Partial<AppSettings> = {}): AppSettings {
     restoreTabs: false,
     closeToTray: true,
     notifyOnAttention: true,
+    agentBridge: true,
     terminalFontSize: 13,
     checkUpdatesOnLaunch: true,
     runtimePrefs: {},
@@ -50,7 +51,9 @@ function installApi(appSettings: AppSettings, snapshot?: { tabs: unknown[]; acti
         id: `s${++seq}`,
         provider: opts.provider,
         cwd: opts.cwd ?? appSettings.defaultCwd,
-        status: 'running'
+        status: 'running',
+        // Mirrors pty-manager.ts, which echoes the flag back on the info.
+        ...(opts.readOnly ? { readOnly: true } : {})
       }
       return info
     }),
@@ -189,6 +192,17 @@ describe('persistSnapshot', () => {
 
     const last = savedSnapshots[savedSnapshots.length - 1]
     expect(last.tabs.map((t) => t.provider)).toEqual(['claude', 'codex'])
+  })
+
+  it('leaves out read-only agent-bridge tabs', async () => {
+    await loadStore()
+    const s = store.getState()
+    await s.createSession('claude', { name: 'mine' })
+    await s.createSession('antigravity', { name: '🤖 helper', readOnly: true })
+
+    // Restored, the bridge tab would come back writable and uncontrolled.
+    const last = savedSnapshots[savedSnapshots.length - 1]
+    expect(last.tabs.map((t) => t.name)).toEqual(['mine'])
   })
 
   it('does not write snapshots while tabs are being restored', async () => {

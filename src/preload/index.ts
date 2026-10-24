@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import type {
+  BridgeOpenTabRequest,
   CreateSessionOptions,
   SessionInfo,
   ProviderMeta,
@@ -162,6 +163,13 @@ const api = {
   onExit: (cb: (p: { id: string; code: number }) => void): Unsubscribe =>
     subscribe('session:exit', cb),
   onStatus: (cb: (info: SessionInfo) => void): Unsubscribe => subscribe('session:status', cb),
+
+  // Agent bridge (main/agent-bridge.ts): main asks, the renderer opens/closes the tab.
+  onBridgeOpenTab: (cb: (req: BridgeOpenTabRequest) => void): Unsubscribe => subscribe('bridge:openTab', cb),
+  bridgeOpenTabResult: (r: { reqId: string; id?: string; error?: string }): void =>
+    ipcRenderer.send('bridge:openTab:result', r),
+  onBridgeCloseTab: (cb: (p: { id: string }) => void): Unsubscribe => subscribe('bridge:closeTab', cb),
+  bridgeReady: (): void => ipcRenderer.send('bridge:ready'),
   onLoginUrl: (cb: (p: LoginUrlEvent) => void): Unsubscribe => subscribe('session:loginUrl', cb),
   /** Output started/stopped flowing — drives the sidebar's activity indicator. */
   onBusy: (cb: (p: SessionBusyEvent) => void): Unsubscribe => subscribe('session:busy', cb),

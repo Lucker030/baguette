@@ -109,6 +109,35 @@ function launchArgs(
   return { extraArgs: [] }
 }
 
+/**
+ * Flags that start a CLI without the ability to change anything: Claude Code's
+ * plan mode, Codex's read-only sandbox, agy's plan mode. Used for tabs another
+ * agent opens through the agent bridge (agent-bridge.ts), so a conversation
+ * the user is only watching can't edit files or run commands behind their back.
+ * They go BEFORE the launch args: `codex resume <id>` is a subcommand, and its
+ * global flags have to precede it.
+ *
+ * Read-only alone is not enough: each CLI can ASK to step outside it (Codex:
+ * "run this outside the sandbox?", Claude: leave plan mode), and the default
+ * answer is yes — so the bridge's own Enter, sent with every message, would
+ * approve it (verified with Codex). So the escape hatches are shut too: Codex
+ * never asks, Claude doesn't get the tools that write or leave plan mode. agy
+ * has no "never ask" switch; its terminal sandbox is the most it offers.
+ * `--disallowedTools=` keeps Claude's variadic flag from eating what follows.
+ */
+function readOnlyArgs(provider: CreateSessionOptions['provider']): string[] {
+  switch (provider) {
+    case 'claude':
+      return ['--permission-mode', 'plan', '--disallowedTools=Bash,Edit,Write,NotebookEdit,ExitPlanMode']
+    case 'codex':
+      return ['--sandbox', 'read-only', '--ask-for-approval', 'never']
+    case 'antigravity':
+      return ['--mode', 'plan', '--sandbox']
+    default:
+      return []
+  }
+}
+
 /** Providers that get a startup banner, and the label it's shown under. */
 const BANNER_LABELS: Partial<Record<CreateSessionOptions['provider'], string>> = {
   claude: 'Claude',
@@ -202,7 +231,7 @@ export class PtyManager extends EventEmitter {
     const cwd = opts.cwd || os.homedir()
     const launch = opts.launch ?? { kind: 'new' }
     const session: Session = {
-      info: { id, provider: opts.provider, cwd, status: 'starting' },
+      info: { id, provider: opts.provider, cwd, status: 'starting', ...(opts.readOnly ? { readOnly: true } : {}) },
       pty: null,
       loginUrlBuffer: '',
       loginUrlDone: !opts.autoOpenLoginUrl,
@@ -236,7 +265,8 @@ export class PtyManager extends EventEmitter {
   ): void {
     const { opts, info } = session
     const { id, cwd } = info
-    const { extraArgs, claudeSessionId } = launchArgs(opts.provider, launch)
+    const { extraArgs: resumeArgs, claudeSessionId } = launchArgs(opts.provider, launch)
+    const extraArgs = opts.readOnly ? [...readOnlyArgs(opts.provider), ...resumeArgs] : resumeArgs
     if (claudeSessionId) info.claudeSessionId = claudeSessionId
     session.launch = launch
 
@@ -608,6 +638,20 @@ export class PtyManager extends EventEmitter {
   private pushOutput(session: Session, id: string, data: string): void {
     session.backlog = (session.backlog + data).slice(-BACKLOG_LIMIT)
     if (session.attached) this.emit('data', { id, data })
+    // Unlike 'data', this fires whether or not a terminal is attached: the
+    // agent bridge mirrors bridge-opened tabs into a headless terminal, and a
+    // tab the user hasn't looked at yet still has to be readable.
+    this.emit('output', { id, data })
+  }
+
+  /** Everything buffered so far, for a listener that starts after the session did. */
+  backlogOf(id: string): string {
+    return this.sessions.get(id)?.backlog ?? ''
+  }
+
+  /** The pty's current size, or undefined before the first resize. */
+  sizeOf(id: string): { cols: number; rows: number } | undefined {
+    return this.sessions.get(id)?.lastSize
   }
 
   /**
@@ -650,6 +694,7 @@ export class PtyManager extends EventEmitter {
     const last = session.lastSize
     if (last && last.cols === cols && last.rows === rows) return
     session.lastSize = { cols, rows }
+    this.emit('resize', { id, cols, rows })
     try {
       pty.resize(cols, rows)
     } catch {

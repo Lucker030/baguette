@@ -56,6 +56,7 @@ function defaults(): AppSettings {
     restoreTabs: true,
     closeToTray: true,
     notifyOnAttention: true,
+    agentBridge: true,
     terminalFontSize: TERMINAL_FONT_SIZE_DEFAULT,
     checkUpdatesOnLaunch: true,
     runtimePrefs: {}
@@ -131,6 +132,7 @@ function load(): AppSettings {
       restoreTabs: parsed.restoreTabs ?? true,
       closeToTray: parsed.closeToTray ?? true,
       notifyOnAttention: parsed.notifyOnAttention ?? true,
+      agentBridge: parsed.agentBridge ?? true,
       terminalFontSize: clampFontSize(parsed.terminalFontSize),
       runtimePrefs: normalizeRuntimePrefs(parsed.runtimePrefs),
       checkUpdatesOnLaunch: parsed.checkUpdatesOnLaunch ?? true
@@ -172,6 +174,7 @@ export function updateSettings(patch: Partial<AppSettings>): AppSettings {
   if (typeof patch?.restoreTabs === 'boolean') next.restoreTabs = patch.restoreTabs
   if (typeof patch?.closeToTray === 'boolean') next.closeToTray = patch.closeToTray
   if (typeof patch?.notifyOnAttention === 'boolean') next.notifyOnAttention = patch.notifyOnAttention
+  if (typeof patch?.agentBridge === 'boolean') next.agentBridge = patch.agentBridge
   if (typeof patch?.terminalFontSize === 'number') next.terminalFontSize = clampFontSize(patch.terminalFontSize)
   if (typeof patch?.checkUpdatesOnLaunch === 'boolean') next.checkUpdatesOnLaunch = patch.checkUpdatesOnLaunch
   if (patch?.currentAccountId === null || typeof patch?.currentAccountId === 'string') {

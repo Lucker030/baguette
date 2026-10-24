@@ -129,8 +129,12 @@ interface AppState {
       groupId?: string | null
       /** Custom tab name to reattach (restore). */
       name?: string
+      /** Start the CLI read-only (agent-bridge tabs). */
+      readOnly?: boolean
+      /** Switch to the new tab; defaults to true. */
+      focus?: boolean
     }
-  ) => Promise<void>
+  ) => Promise<SessionInfo>
   /** New-conversation / continue-last / pick-a-save wrappers used by the UI. */
   newSession: (provider: Provider) => Promise<void>
   continueSession: (provider: Provider) => Promise<void>
@@ -190,6 +194,7 @@ interface AppState {
   requestSearch: () => void
   setCloseToTray: (enabled: boolean) => Promise<void>
   setNotifyOnAttention: (enabled: boolean) => Promise<void>
+  setAgentBridge: (enabled: boolean) => Promise<void>
 
   // Updates
   setCheckUpdatesOnLaunch: (enabled: boolean) => Promise<void>
@@ -316,6 +321,31 @@ export const useApp = create<AppState>((set, get) => ({
     window.api.onLoginUrl(({ id, url }) => {
       set((s) => ({ loginUrls: { ...s.loginUrls, [id]: url } }))
     })
+    // Agent bridge: main asks for a tab and waits for the id; open it through
+    // the same createSession every button uses so it is a normal tab in
+    // every respect (sidebar, group, panes, snapshot).
+    window.api.onBridgeOpenTab?.((req) => {
+      get()
+        .createSession(req.provider, {
+          launch: { kind: 'new' },
+          cwd: req.cwd,
+          accountId: req.accountId,
+          name: req.name,
+          readOnly: req.readOnly,
+          focus: req.focus
+        })
+        .then((info) => window.api.bridgeOpenTabResult({ reqId: req.reqId, id: info.id }))
+        .catch((e: unknown) =>
+          window.api.bridgeOpenTabResult({ reqId: req.reqId, error: (e as Error)?.message ?? String(e) })
+        )
+    })
+    window.api.onBridgeCloseTab?.(({ id }) => get().closeSession(id))
+    // Tell main it may now send bridge requests: subscribed above, and — once
+    // the font is in and a frame has been laid out — a new terminal will
+    // measure its real size instead of a garbage one.
+    void (document.fonts?.ready ?? Promise.resolve()).then(() =>
+      requestAnimationFrame(() => window.api.bridgeReady?.())
+    )
     window.api.onBusy?.(({ id, busy }) => {
       set((s) => ({ sessionBusy: { ...s.sessionBusy, [id]: busy } }))
     })
@@ -448,7 +478,8 @@ export const useApp = create<AppState>((set, get) => ({
         cwd: opts?.cwd ?? (nextCwd || undefined),
         accountId,
         autoOpenLoginUrl: opts?.autoOpenLoginUrl,
-        launch: opts?.launch
+        launch: opts?.launch,
+        readOnly: opts?.readOnly
       })
     } finally {
       set({ creating: false })
@@ -461,11 +492,10 @@ export const useApp = create<AppState>((set, get) => ({
       const sessionName = { ...s.sessionName }
       if (opts?.name) sessionName[info.id] = opts.name
       const placed = placeInFocusedPane(s.panes, s.focusedPane, info.id)
+      const focus = opts?.focus !== false
       return {
         sessions: [...s.sessions, info],
-        activeId: info.id,
-        view: 'terminal',
-        ...placed,
+        ...(focus ? { activeId: info.id, view: 'terminal' as const, ...placed } : {}),
         sessionGroupId: { ...s.sessionGroupId, [info.id]: targetGroup },
         sessionClaudeId,
         sessionAccountId,
@@ -475,19 +505,28 @@ export const useApp = create<AppState>((set, get) => ({
       }
     })
     get().persistSnapshot()
+    return info
   },
 
-  newSession: (provider) => get().createSession(provider, { launch: { kind: 'new' } }),
-  continueSession: (provider) => get().createSession(provider, { launch: { kind: 'continue' } }),
-  pickSession: (provider) => get().createSession(provider, { launch: { kind: 'pick' } }),
+  newSession: async (provider) => {
+    await get().createSession(provider, { launch: { kind: 'new' } })
+  },
+  continueSession: async (provider) => {
+    await get().createSession(provider, { launch: { kind: 'continue' } })
+  },
+  pickSession: async (provider) => {
+    await get().createSession(provider, { launch: { kind: 'pick' } })
+  },
 
   persistSnapshot: () => {
     const s = get()
     if (s.restoring) return
     // Only agent tabs carry resumable conversation history worth restoring;
-    // shell/copilot tabs are transient and skipped.
+    // shell/copilot tabs are transient and skipped, and so are read-only
+    // agent-bridge tabs (see SessionInfo.readOnly).
     const restorable = s.sessions.filter(
-      (x) => x.provider === 'claude' || x.provider === 'codex' || x.provider === 'antigravity'
+      (x) =>
+        (x.provider === 'claude' || x.provider === 'codex' || x.provider === 'antigravity') && !x.readOnly
     )
     const tabs: PersistedTab[] = restorable.map((sess) => ({
       provider: sess.provider,
@@ -863,6 +902,11 @@ export const useApp = create<AppState>((set, get) => ({
 
   setCloseToTray: async (enabled) => {
     const settings = await window.api.updateSettings({ closeToTray: enabled })
+    set({ settings })
+  },
+
+  setAgentBridge: async (enabled) => {
+    const settings = await window.api.updateSettings({ agentBridge: enabled })
     set({ settings })
   },
 
