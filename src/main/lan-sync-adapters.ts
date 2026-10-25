@@ -263,7 +263,10 @@ export function skillsAdapter(root: string, work: string, onSkip?: (name: string
       const out: Record<string, string> = {}
       if (!existsSync(root)) return out
       for (const name of readdirSync(root)) {
-        if (name.startsWith('.') || !safeSegment(name)) continue
+        // `synced` is Claude Code's own copy of claude.ai skills, with
+        // per-PC state files (manifest.json, .last-complete-round); Claude
+        // syncs it itself (seen 2026-10-25: it made every sync conflict).
+        if (name.startsWith('.') || name === 'synced' || !safeSegment(name)) continue
         const dir = join(root, name)
         const st = lstatSync(dir)
         if (!st.isDirectory() || st.isSymbolicLink()) continue

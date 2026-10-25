@@ -177,6 +177,18 @@ const TOOLS = [
   }
 ]
 
+// MCP tool annotations. Clients use them to decide what needs the user's
+// approval: Codex refuses an unannotated tool outright when its approval
+// policy is "never" (seen 2026-10-25), so the tools that only read say so.
+// The others act (open a tab, type, close one), though never on files: a
+// bridge tab is read-only unless that PC allowed otherwise.
+const READ_ONLY = new Set(['baguette_devices', 'baguette_list_tabs', 'baguette_screen', 'baguette_wait'])
+for (const t of TOOLS as (typeof TOOLS[number] & { annotations?: Json })[]) {
+  t.annotations = READ_ONLY.has(t.name)
+    ? { readOnlyHint: true, openWorldHint: false }
+    : { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }
+}
+
 async function callTool(name: string, a: Json): Promise<string> {
   switch (name) {
     case 'baguette_devices': {

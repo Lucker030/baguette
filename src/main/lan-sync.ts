@@ -361,10 +361,10 @@ export class LanSync extends EventEmitter {
         }
         const copyKey = adapter.copyKey(key, them)
         const copy = adapter.asCopy(r[key], copyKey, them)
-        const [okR1, okR2] = await applyRemote([
-          { key: copyKey, payload: copy, expect: remote[copyKey] ?? null },
-          { key, payload: l[key], expect: remote[key] }
-        ])
+        // One item per call: two big skills together overflow a LAN frame
+        // (MAX_FRAME), which drops the connection.
+        const [okR1] = await applyRemote([{ key: copyKey, payload: copy, expect: remote[copyKey] ?? null }])
+        const [okR2] = await applyRemote([{ key, payload: l[key], expect: remote[key] }])
         const [okL] = await adapter.apply([{ key: copyKey, payload: copy, expect: local[copyKey] ?? null }])
         step(okR1 && okR2 && okL)
       }
