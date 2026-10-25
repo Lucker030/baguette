@@ -1,6 +1,6 @@
 {
   "name": "baguette",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Local AI CLI agent platform — 多開 CLI、多帳號、Skills／Hook 庫、知識庫，內網互控",
   "main": "./out/main/index.js",
   "author": "Ethan",
