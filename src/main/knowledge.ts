@@ -4,8 +4,8 @@ import { join } from 'node:path'
 import type { KnowledgeEntry } from '../shared/types'
 import { writeFileAtomic } from './atomic-write'
 
-// Knowledge base, persisted as one plain JSON file in userData — the same
-// convention as todos.ts. A Claude Code session is expected to append to this
+// Knowledge base, persisted as one plain JSON file in userData. A Claude Code
+// session is expected to append to this
 // file directly (see the `knowledge-capture` skill), so the shape favours
 // being obvious to hand-edit over being tidy to query, and everything is
 // normalized on read so a hand-written entry missing a field can never break
@@ -172,8 +172,14 @@ export function removeKnowledge(id: string): KnowledgeEntry[] {
 /**
  * Watch the file for changes made outside the app — that is how a Claude
  * session's captured knowledge shows up without the user having to hit
- * refresh. See todos.ts's `watchTodos` for why this polls rather than using
- * the event-based `fs.watch`.
+ * refresh.
+ *
+ * Uses stat polling (`watchFile`) rather than `fs.watch`. The event-based API
+ * proved unreliable here: it needs the returned FSWatcher kept alive, it can
+ * lose the inode when an atomic write renames a new file over the old one,
+ * and on Windows the events for a single small file simply did not arrive in
+ * testing. Polling once a second costs nothing for one small file and always
+ * works — including before the file has been created for the first time.
  */
 export function watchKnowledge(onChange: () => void): () => void {
   const path = knowledgePath()

@@ -7,7 +7,7 @@ import { TerminalView } from './components/TerminalView'
 import { SkillsLibrary } from './components/SkillsLibrary'
 import { SettingsPanel } from './components/SettingsPanel'
 import { HooksLibrary } from './components/HooksLibrary'
-import { TodosPanel } from './components/TodosPanel'
+import { DevicesPanel } from './components/DevicesPanel'
 import { KnowledgeLibrary } from './components/KnowledgeLibrary'
 import { EmptyState } from './components/EmptyState'
 import { ToastStack } from './components/ToastStack'
@@ -312,10 +312,10 @@ export default function App(): JSX.Element {
             </div>
           )}
 
-          {view === 'todos' && (
+          {view === 'devices' && (
             <div className="absolute inset-0 bg-bg-base">
-              <ErrorBoundary label="代辦事項">
-                <TodosPanel />
+              <ErrorBoundary label="內網裝置">
+                <DevicesPanel />
               </ErrorBoundary>
             </div>
           )}

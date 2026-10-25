@@ -17,7 +17,7 @@ interface NavItem {
  * nothing and eventually push 設定 off the bottom of the sidebar.
  */
 const ITEMS: NavItem[] = [
-  { view: 'todos', label: '代辦事項' },
+  { view: 'devices', label: '內網裝置' },
   { view: 'knowledge', label: '知識庫' },
   { view: 'hooks', label: 'Hook 庫' },
   { view: 'skills', label: 'Skills 庫' }

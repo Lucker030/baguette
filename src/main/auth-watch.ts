@@ -50,7 +50,7 @@ export const AUTH_TAIL_KEEP = 300
 
 /**
  * Watch a credentials file for writes. Stat-polled (`watchFile`) for the
- * same reasons todos.ts gives: event-based watching loses the inode on an
+ * same reasons knowledge.ts gives: event-based watching loses the inode on an
  * atomic replace, and for the default account the file lives on a
  * `\\wsl.localhost\...` UNC path where change events do not arrive at all.
  * Several writes land during one login (token, then profile), so the

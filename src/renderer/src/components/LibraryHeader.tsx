@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import { useApp } from '../store/sessions'
 
 /**
- * Shared top bar for every "library" screen (Skills/Hooks/Todos/Accounts/
+ * Shared top bar for every "library" screen (Skills/Hooks/Devices/Accounts/
  * Settings/遊戲區): the "← 返回終端" back button, plus whatever
  * title/search/actions each screen needs passed in as children.
  */

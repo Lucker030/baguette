@@ -17,7 +17,13 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()],
     build: {
       rollupOptions: {
-        input: { index: resolve(root, 'src/main/index.ts') }
+        input: {
+          index: resolve(root, 'src/main/index.ts'),
+          // The MCP server (out/main/mcp.js): a standalone script an AI CLI
+          // runs with baguette's exe as Node. It imports nothing from the app,
+          // so it never shares a chunk with index.
+          mcp: resolve(root, 'src/main/mcp.ts')
+        }
       }
     }
   },

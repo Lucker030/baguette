@@ -28,6 +28,8 @@ function settings(overrides: Partial<AppSettings> = {}): AppSettings {
     notifyOnAttention: true,
     agentBridge: true,
     autoApprove: {},
+    lanEnabled: false,
+    lanDeviceName: '',
     terminalFontSize: 13,
     checkUpdatesOnLaunch: true,
     runtimePrefs: {},

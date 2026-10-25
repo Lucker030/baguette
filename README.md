@@ -24,7 +24,8 @@
 - **提醒** — 背景分頁跑完或在等你確認時，側欄亮黃點並跳 Windows 通知。
 - **系統匣** — 關掉視窗 session 繼續跑。
 - **Skills 庫 / Hook 庫** — 管理 Claude Code 的 skills 和 hooks。
-- **代辦事項 / 知識庫** — Claude 也能直接寫進來。
+- **知識庫** — Claude 也能直接寫進來。
+- **內網裝置** — 同一個網路裡的電腦用 6 位數配對碼配對後，一台電腦上的 AI 可以在另一台開 AI 分頁、對話、讀回覆（預設唯讀），連線全程加密。也提供 MCP server，Claude Code、Codex、Antigravity 都能直接用。
 - **自動更新** — 從這個 repo 的 Releases 檢查新版，一鍵下載安裝。
 
 ## 安裝

@@ -49,6 +49,9 @@ npmRebuild: false
 asar: true
 asarUnpack:
   - '**/node_modules/@homebridge/node-pty-prebuilt-multiarch/**'
+# The MCP server (src/main/mcp.ts) is run by an AI CLI with this exe as plain
+# Node; a real file on disk keeps that independent of asar support.
+  - out/main/mcp.js
 
 win:
   icon: build/icon.ico

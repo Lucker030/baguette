@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-// Same convention as todos.test.ts: this file is written by two authors, the
+// This file is written by two authors, the
 // app and a Claude Code session editing the JSON by hand (the
 // `knowledge-capture` skill). Tests centre on tolerating whatever a
 // hand-written entry looks like — that is the failure mode that would

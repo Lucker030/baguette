@@ -24,7 +24,7 @@ type MainView =
   | 'skills'
   | 'settings'
   | 'hooks'
-  | 'todos'
+  | 'devices'
   | 'knowledge'
 
 /** How a split terminal area is divided. */
@@ -196,6 +196,8 @@ interface AppState {
   setNotifyOnAttention: (enabled: boolean) => Promise<void>
   setAgentBridge: (enabled: boolean) => Promise<void>
   setAutoApprove: (provider: Provider, enabled: boolean) => Promise<void>
+  setLanEnabled: (enabled: boolean) => Promise<void>
+  setLanDeviceName: (name: string) => Promise<void>
 
   // Updates
   setCheckUpdatesOnLaunch: (enabled: boolean) => Promise<void>
@@ -372,6 +374,9 @@ export const useApp = create<AppState>((set, get) => ({
       if (get().sessions.some((x) => x.id === id)) get().setActive(id)
     })
     window.api.onAppError?.((message) => get().pushToast(message))
+    // Toasted here rather than in the devices screen: the target PC pairs
+    // while nobody is necessarily looking at that screen.
+    window.api.onLanPaired?.(({ name }) => get().pushToast(`已和「${name}」配對`))
     window.api.onUpdateResult?.((result) => {
       const previous = get().update
       set({ update: result })
@@ -913,6 +918,16 @@ export const useApp = create<AppState>((set, get) => ({
 
   setAutoApprove: async (provider, enabled) => {
     const settings = await window.api.updateSettings({ autoApprove: { [provider]: enabled } })
+    set({ settings })
+  },
+
+  setLanEnabled: async (enabled) => {
+    const settings = await window.api.updateSettings({ lanEnabled: enabled })
+    set({ settings })
+  },
+
+  setLanDeviceName: async (name) => {
+    const settings = await window.api.updateSettings({ lanDeviceName: name })
     set({ settings })
   },
 

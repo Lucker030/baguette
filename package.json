@@ -1,7 +1,7 @@
 {
   "name": "baguette",
   "version": "1.0.1",
-  "description": "Local AI CLI agent platform — 多開 CLI、多帳號、Skills／Hook 庫、代辦與知識庫",
+  "description": "Local AI CLI agent platform — 多開 CLI、多帳號、Skills／Hook 庫、知識庫，內網互控",
   "main": "./out/main/index.js",
   "author": "Ethan",
   "license": "MIT",
@@ -22,6 +22,7 @@
   },
   "dependencies": {
     "@homebridge/node-pty-prebuilt-multiarch": "^0.14.1",
+    "@noble/curves": "1.9.7",
     "@xterm/headless": "^5.5.0"
   },
   "devDependencies": {

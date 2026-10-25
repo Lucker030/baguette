@@ -22,6 +22,12 @@ import { describeError, log } from './log'
 // - only tabs the bridge itself opened (never one the user opened by hand),
 // - and those start read-only by default (see readOnlyArgs in launch-mode.ts),
 //   so the watched agent can answer but not edit files or run commands.
+//
+// The same calls also arrive from paired PCs over the LAN (lan.ts), as
+// exec() with a Caller naming that device: it sees only the tabs it opened,
+// and gets a writable tab only if this PC allowed that for it. The HTTP
+// server additionally relays /v1/devices/<id>/tabs/... to a paired PC, so a
+// local AI (or the MCP server, mcp.ts) reaches every PC through one port.
 
 /** The slice of PtyManager the bridge needs, structural so tests can fake it. */
 export interface BridgePty {
@@ -51,7 +57,41 @@ export interface BridgeDeps {
   closeTab(id: string): void
   /** Where `{port, token}` is published. */
   infoFile: string
+  /** LAN control, when it is on (lan.ts). */
+  lan?: () => BridgeLan | null
 }
+
+/** The slice of LanNode the HTTP server relays to. */
+export interface BridgeLan {
+  devices(): unknown[]
+  call(deviceId: string, call: BridgeCall): Promise<unknown>
+  startPairing(): unknown
+  cancelPairing(): void
+  pair(target: { deviceId?: string; address?: string }, code: string): Promise<unknown>
+}
+
+export type BridgeKind = 'list' | 'open' | 'input' | 'screen' | 'wait' | 'close'
+
+/** One bridge operation, whether it came over HTTP or from a paired PC. */
+export interface BridgeCall {
+  kind: BridgeKind
+  /** The tab, for everything but list/open. */
+  id?: string
+  body: Record<string, unknown>
+  /** screen: how many lines. */
+  lines?: number
+}
+
+/** Who is asking: this PC ('local') or a paired device (its id). */
+export interface Caller {
+  owner: string
+  /** May open tabs that are not read-only. */
+  allowWrite: boolean
+  /** Shown in the tab name for a remote caller. */
+  label?: string
+}
+
+export const LOCAL_CALLER: Caller = { owner: 'local', allowWrite: true }
 
 // ---- pure helpers (unit-tested) ----
 
@@ -170,23 +210,33 @@ export function dropInputBox(lines: string[]): string[] {
 }
 
 export type Route =
-  | { kind: 'list' }
-  | { kind: 'open' }
-  | { kind: 'input'; id: string }
-  | { kind: 'screen'; id: string }
-  | { kind: 'wait'; id: string }
-  | { kind: 'close'; id: string }
+  | { kind: BridgeKind; id?: string; device?: string }
+  | { kind: 'devices' }
+  | { kind: 'pairing-start' }
+  | { kind: 'pairing-stop' }
+  | { kind: 'pair' }
   | null
 
+/**
+ * `/v1/tabs/...` acts on this PC; `/v1/devices/<id>/tabs/...` on a paired
+ * one. `/v1/devices` lists them, `/v1/lan/pairing` shows / withdraws this
+ * PC's pairing code and `/v1/lan/pair` pairs with another PC.
+ */
 export function parseRoute(method: string | undefined, path: string): Route {
-  const m = /^\/v1\/tabs(?:\/([\w-]+)(?:\/(input|screen|wait))?)?\/?$/.exec(path)
+  if (/^\/v1\/devices\/?$/.test(path)) return method === 'GET' ? { kind: 'devices' } : null
+  if (/^\/v1\/lan\/pairing\/?$/.test(path)) {
+    return method === 'POST' ? { kind: 'pairing-start' } : method === 'DELETE' ? { kind: 'pairing-stop' } : null
+  }
+  if (/^\/v1\/lan\/pair\/?$/.test(path)) return method === 'POST' ? { kind: 'pair' } : null
+  const m = /^\/v1(?:\/devices\/([\w-]+))?\/tabs(?:\/([\w-]+)(?:\/(input|screen|wait))?)?\/?$/.exec(path)
   if (!m) return null
-  const [, id, action] = m
-  if (!id) return method === 'GET' ? { kind: 'list' } : method === 'POST' ? { kind: 'open' } : null
-  if (!action) return method === 'DELETE' ? { kind: 'close', id } : null
-  if (action === 'screen') return method === 'GET' ? { kind: 'screen', id } : null
+  const [, device, id, action] = m
+  const at = (r: { kind: BridgeKind; id?: string }): Route => (device ? { ...r, device } : r)
+  if (!id) return method === 'GET' ? at({ kind: 'list' }) : method === 'POST' ? at({ kind: 'open' }) : null
+  if (!action) return method === 'DELETE' ? at({ kind: 'close', id }) : null
+  if (action === 'screen') return method === 'GET' ? at({ kind: 'screen', id }) : null
   if (method !== 'POST') return null
-  return action === 'input' ? { kind: 'input', id } : { kind: 'wait', id }
+  return action === 'input' ? at({ kind: 'input', id }) : at({ kind: 'wait', id })
 }
 
 // ---- headless mirror of each controlled tab ----
@@ -221,6 +271,9 @@ interface Controlled {
   id: string
   provider: Provider
   name: string
+  /** Caller.owner of whoever opened it. */
+  owner: string
+  readOnly: boolean
   term: HeadlessTerminal
   lastOutput: number
   outputSince: number
@@ -306,70 +359,114 @@ export class AgentBridge {
       if (!route) return send(404, { error: 'no such endpoint' })
       const body = req.method === 'POST' ? await readJson(req) : {}
 
-      switch (route.kind) {
-        case 'list':
-          return send(200, { tabs: [...this.tabs.values()].map((t) => this.describe(t)) })
-        case 'open':
-          return send(200, await this.open(body))
-        case 'close': {
-          const t = this.mustGet(route.id)
-          this.deps.closeTab(t.id)
-          this.forget(t.id)
-          return send(200, { closed: t.id })
+      if (route.kind === 'devices' || route.kind === 'pairing-start' || route.kind === 'pairing-stop' || route.kind === 'pair') {
+        const lan = this.deps.lan?.() ?? null
+        if (!lan) throw new HttpError(409, 'LAN control is off (baguette → 內網裝置 → 啟用)')
+        if (route.kind === 'devices') return send(200, { devices: lan.devices() })
+        if (route.kind === 'pairing-start') return send(200, lan.startPairing())
+        if (route.kind === 'pairing-stop') {
+          lan.cancelPairing()
+          return send(200, { stopped: true })
         }
-        case 'screen': {
-          const t = this.mustGet(route.id)
-          const lines = clampInt(url.searchParams.get('lines'), 1, SCROLLBACK, 60)
-          return send(200, { ...this.describe(t), screen: (await this.screen(t, lines)).join('\n') })
+        const target = {
+          deviceId: typeof body.device === 'string' ? body.device : undefined,
+          address: typeof body.address === 'string' ? body.address : undefined
         }
-        case 'input': {
-          const t = this.mustGet(route.id)
-          if (typeof body.key === 'string') {
-            const seq = KEYS[body.key]
-            if (!seq) return send(400, { error: `key must be one of ${Object.keys(KEYS).join(', ')}` })
-            if (t.exited) throw new HttpError(409, `tab ${t.id} has exited`)
-            this.deps.pty.write(t.id, seq)
-            const waited = await this.waitQuiet(t, { quietMs: 1500, startMs: 5000, ...body })
-            return send(200, { ...this.describe(t), ...waited, screen: (await this.screen(t, 60)).join('\n') })
-          }
-          const text = typeof body.text === 'string' ? body.text : ''
-          if (!text) return send(400, { error: 'text (or key) is required' })
-          if (isCommandLine(text)) {
-            return send(400, { error: 'messages may not start with ! or / (shell and slash commands bypass read-only)' })
-          }
-          // Where this turn starts, so the reply can't include earlier turns.
-          const from = await this.cursorLine(t)
-          await this.type(t, text, body.submit !== false)
-          if (body.wait === false) return send(200, { sent: true })
-          const waited = await this.waitQuiet(t, body)
-          return send(200, { ...this.describe(t), ...waited, reply: replyAfter(await this.linesFrom(t, from), text) })
-        }
-        case 'wait': {
-          const t = this.mustGet(route.id)
-          const waited = await this.waitQuiet(t, body, true)
-          return send(200, { ...this.describe(t), ...waited, screen: (await this.screen(t, 60)).join('\n') })
-        }
+        return send(200, await lan.pair(target, typeof body.code === 'string' ? body.code : String(body.code ?? '')))
       }
+
+      const call: BridgeCall = {
+        kind: route.kind,
+        id: route.id,
+        body,
+        lines: clampInt(url.searchParams.get('lines'), 1, SCROLLBACK, 60)
+      }
+      if (route.device) {
+        const lan = this.deps.lan?.() ?? null
+        if (!lan) throw new HttpError(409, 'LAN control is off (baguette → 內網裝置 → 啟用)')
+        return send(200, await lan.call(route.device, call))
+      }
+      return send(200, await this.exec(call, LOCAL_CALLER))
     } catch (e) {
-      const status = e instanceof HttpError ? e.status : 500
+      const status = typeof (e as { status?: unknown })?.status === 'number' ? (e as { status: number }).status : 500
       if (status === 500) log.error(`agent bridge: ${describeError(e)}`)
       send(status, { error: e instanceof Error ? e.message : String(e) })
     }
   }
 
-  private async open(body: Record<string, unknown>): Promise<unknown> {
+  /** One bridge operation for `caller`; throws HttpError for the caller's mistakes. */
+  async exec(call: BridgeCall, caller: Caller): Promise<unknown> {
+    const { body } = call
+    switch (call.kind) {
+      case 'list':
+        return { tabs: [...this.tabs.values()].filter((t) => this.visibleTo(t, caller)).map((t) => this.describe(t)) }
+      case 'open':
+        return this.open(body, caller)
+      case 'close': {
+        const t = this.mustGet(call.id, caller)
+        this.deps.closeTab(t.id)
+        this.forget(t.id)
+        return { closed: t.id }
+      }
+      case 'screen': {
+        const t = this.mustGet(call.id, caller)
+        const lines = clampInt(call.lines ?? body.lines, 1, SCROLLBACK, 60)
+        return { ...this.describe(t), screen: (await this.screen(t, lines)).join('\n') }
+      }
+      case 'input': {
+        const t = this.mustGet(call.id, caller)
+        if (typeof body.key === 'string') {
+          const seq = KEYS[body.key]
+          if (!seq) throw new HttpError(400, `key must be one of ${Object.keys(KEYS).join(', ')}`)
+          if (t.exited) throw new HttpError(409, `tab ${t.id} has exited`)
+          this.deps.pty.write(t.id, seq)
+          const waited = await this.waitQuiet(t, { quietMs: 1500, startMs: 5000, ...body })
+          return { ...this.describe(t), ...waited, screen: (await this.screen(t, 60)).join('\n') }
+        }
+        const text = typeof body.text === 'string' ? body.text : ''
+        if (!text) throw new HttpError(400, 'text (or key) is required')
+        if (isCommandLine(text)) {
+          throw new HttpError(400, 'messages may not start with ! or / (shell and slash commands bypass read-only)')
+        }
+        // Where this turn starts, so the reply can't include earlier turns.
+        const from = await this.cursorLine(t)
+        await this.type(t, text, body.submit !== false)
+        if (body.wait === false) return { sent: true }
+        const waited = await this.waitQuiet(t, body)
+        return { ...this.describe(t), ...waited, reply: replyAfter(await this.linesFrom(t, from), text) }
+      }
+      case 'wait': {
+        const t = this.mustGet(call.id, caller)
+        const waited = await this.waitQuiet(t, body, true)
+        return { ...this.describe(t), ...waited, screen: (await this.screen(t, 60)).join('\n') }
+      }
+    }
+  }
+
+  /** This PC sees every bridge tab; a paired PC only the ones it opened. */
+  private visibleTo(t: Controlled, caller: Caller): boolean {
+    return caller.owner === LOCAL_CALLER.owner || t.owner === caller.owner
+  }
+
+  private async open(body: Record<string, unknown>, caller: Caller): Promise<unknown> {
     const provider = PROVIDERS.find((p) => p === body.provider)
     if (!provider || provider === 'shell') {
       throw new HttpError(400, `provider must be one of ${PROVIDERS.filter((p) => p !== 'shell').join(', ')}`)
     }
+    // Read-only unless the caller explicitly asks otherwise — and only a
+    // caller this PC allows may ask (a paired PC needs allowWrite).
+    const readOnly = body.readOnly !== false
+    if (!readOnly && !caller.allowWrite) {
+      throw new HttpError(403, 'this PC only allows you read-only tabs (內網裝置 → 允許開可寫入的分頁)')
+    }
     const name = typeof body.name === 'string' && body.name.trim() ? body.name.trim().slice(0, 40) : provider
     const id = await this.deps.openTab({
       provider,
-      name: `🤖 ${name}`,
+      // A remote caller's tabs say whose they are, for whoever sits at this PC.
+      name: caller.label ? `🤖 ${caller.label.slice(0, 20)}／${name}` : `🤖 ${name}`,
       cwd: typeof body.cwd === 'string' && body.cwd ? body.cwd : undefined,
       accountId: typeof body.accountId === 'string' ? body.accountId : undefined,
-      // Read-only unless the caller explicitly asks otherwise.
-      readOnly: body.readOnly !== false,
+      readOnly,
       // Always brought to the front: watching is the point.
       focus: true
     })
@@ -387,6 +484,8 @@ export class AgentBridge {
       id,
       provider,
       name,
+      owner: caller.owner,
+      readOnly,
       term,
       lastOutput: Date.now(),
       outputSince: 0,
@@ -399,9 +498,9 @@ export class AgentBridge {
     return { ...this.describe(t), ready: ready.settled }
   }
 
-  private mustGet(id: string): Controlled {
-    const t = this.tabs.get(id)
-    if (!t) throw new HttpError(404, `tab ${id} was not opened by the bridge (or is closed)`)
+  private mustGet(id: string | undefined, caller: Caller): Controlled {
+    const t = id ? this.tabs.get(id) : undefined
+    if (!t || !this.visibleTo(t, caller)) throw new HttpError(404, `tab ${id} was not opened by you through the bridge (or is closed)`)
     return t
   }
 
@@ -413,6 +512,7 @@ export class AgentBridge {
       provider: t.provider,
       name: t.name,
       status: info?.status ?? 'closed',
+      readOnly: t.readOnly,
       exited: t.exited,
       cols: size?.cols,
       rows: size?.rows
@@ -499,7 +599,7 @@ export class AgentBridge {
   }
 }
 
-class HttpError extends Error {
+export class HttpError extends Error {
   constructor(
     readonly status: number,
     message: string

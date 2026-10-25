@@ -17,7 +17,10 @@ import type {
   SessionAttentionEvent,
   SessionAuthRestartEvent,
   SessionBusyEvent,
-  TodoItem,
+  LanDevice,
+  LanRemoteTab,
+  LanState,
+  McpInfo,
   UpdateCheckResult
 } from '../shared/types'
 
@@ -92,20 +95,29 @@ const api = {
   setHookEnabled: (id: string, enabled: boolean): Promise<HookDef[]> =>
     ipcRenderer.invoke('hooks:setEnabled', id, enabled),
 
-  // 每日代辦事項
-  listTodos: (): Promise<TodoItem[]> => ipcRenderer.invoke('todos:list'),
-  addTodos: (texts: string[], date?: string): Promise<TodoItem[]> =>
-    ipcRenderer.invoke('todos:add', texts, date),
-  setTodoDone: (id: string, done: boolean): Promise<TodoItem[]> =>
-    ipcRenderer.invoke('todos:setDone', id, done),
-  updateTodoText: (id: string, text: string): Promise<TodoItem[]> =>
-    ipcRenderer.invoke('todos:updateText', id, text),
-  removeTodo: (id: string): Promise<TodoItem[]> => ipcRenderer.invoke('todos:remove', id),
-  clearDoneTodos: (): Promise<TodoItem[]> => ipcRenderer.invoke('todos:clearDone'),
-  todosFilePath: (): Promise<string> => ipcRenderer.invoke('todos:path'),
-  /** Fires when todos.json changes on disk — e.g. a Claude session assigned some. */
-  onTodosChanged: (cb: (items: TodoItem[]) => void): Unsubscribe =>
-    subscribe('todos:changed', cb),
+  // 內網裝置 (main/lan.ts)
+  getLanState: (): Promise<LanState> => ipcRenderer.invoke('lan:state'),
+  /** Show a pairing code on this PC; resolves with it. */
+  startLanPairing: (): Promise<{ code: string; expiresAt: number }> => ipcRenderer.invoke('lan:startPairing'),
+  cancelLanPairing: (): Promise<void> => ipcRenderer.invoke('lan:cancelPairing'),
+  pairLanDevice: (target: { deviceId?: string; address?: string }, code: string): Promise<LanDevice> =>
+    ipcRenderer.invoke('lan:pair', target, code),
+  /** Look a device up by IP, for when discovery can't see it. */
+  probeLanAddress: (address: string): Promise<LanDevice> => ipcRenderer.invoke('lan:probe', address),
+  unpairLanDevice: (id: string): Promise<void> => ipcRenderer.invoke('lan:unpair', id),
+  setLanAllowWrite: (id: string, allow: boolean): Promise<void> =>
+    ipcRenderer.invoke('lan:setAllowWrite', id, allow),
+  /** The bridge tabs this PC opened on a paired one. */
+  listLanTabs: (deviceId: string): Promise<{ tabs: LanRemoteTab[] }> =>
+    ipcRenderer.invoke('lan:call', deviceId, { kind: 'list' }),
+  lanTabScreen: (deviceId: string, tabId: string, lines = 40): Promise<LanRemoteTab> =>
+    ipcRenderer.invoke('lan:call', deviceId, { kind: 'screen', id: tabId, lines }),
+  closeLanTab: (deviceId: string, tabId: string): Promise<void> =>
+    ipcRenderer.invoke('lan:call', deviceId, { kind: 'close', id: tabId }),
+  getMcpInfo: (): Promise<McpInfo> => ipcRenderer.invoke('lan:mcpInfo'),
+  onLanChanged: (cb: (s: LanState) => void): Unsubscribe => subscribe('lan:changed', cb),
+  /** Pairing finished (on either side). */
+  onLanPaired: (cb: (d: { id: string; name: string }) => void): Unsubscribe => subscribe('lan:paired', cb),
 
   listKnowledge: (): Promise<KnowledgeEntry[]> => ipcRenderer.invoke('knowledge:list'),
   addKnowledge: (

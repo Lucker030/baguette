@@ -2,10 +2,11 @@ import { app, BrowserWindow, ipcMain, shell, dialog, clipboard, Notification, na
 import type { Tray } from 'electron'
 import { writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
+import os from 'node:os'
 import { join } from 'node:path'
 import { PtyManager } from './pty-manager'
 import { AgentBridge } from './agent-bridge'
-import type { OpenTabRequest } from './agent-bridge'
+import type { BridgeCall, OpenTabRequest } from './agent-bridge'
 import { listProviders, setRuntimePrefs, warmProviderCache } from './providers'
 import { listSkills, createSkill } from './skills'
 import { listHooks, createHook, updateHook, removeHook, setHookEnabled } from './hooks'
@@ -14,16 +15,8 @@ import { sendToRenderer } from './renderer-bridge'
 import { initLog, log, logDir, logFile } from './log'
 import { appIconPath, createTray } from './tray'
 import { checkForUpdate, installUpdate, RELEASES_PAGE } from './updater'
-import {
-  addTodos,
-  clearDoneTodos,
-  listTodos,
-  removeTodo,
-  setTodoDone,
-  todosPath,
-  updateTodoText,
-  watchTodos
-} from './todos'
+import { LanNode } from './lan'
+import { lanStore } from './lan-store'
 import {
   addKnowledge,
   knowledgePath,
@@ -110,13 +103,73 @@ function syncAgentBridge(): void {
       pty: ptyManager,
       openTab: openTabViaRenderer,
       closeTab: (id) => sendToRenderer(mainWindow, 'bridge:closeTab', { id }),
-      infoFile: join(app.getPath('userData'), 'agent-bridge.json')
+      infoFile: bridgeInfoFile(),
+      lan: () => (lanNode?.running ? lanNode : null)
     })
   }
   if (getSettings().agentBridge) {
     agentBridge.start().catch((e) => log.error(`agent bridge failed to start: ${(e as Error).message}`))
   } else {
     agentBridge.stop()
+  }
+}
+
+function bridgeInfoFile(): string {
+  return join(app.getPath('userData'), 'agent-bridge.json')
+}
+
+// ---- LAN control (lan.ts) ----------------------------------------------------
+let lanNode: LanNode | null = null
+
+function lanDeviceName(): string {
+  return getSettings().lanDeviceName || os.hostname()
+}
+
+function sendLanState(): void {
+  if (lanNode) sendToRenderer(mainWindow, 'lan:changed', { status: lanNode.status(), devices: lanNode.devices() })
+}
+
+/** Start or stop LAN control to match settings.lanEnabled. */
+function syncLan(): void {
+  if (!lanNode) {
+    lanNode = new LanNode({
+      store: lanStore,
+      deviceName: lanDeviceName,
+      version: app.getVersion(),
+      // syncAgentBridge runs first at startup, so the bridge exists by now;
+      // exec works whether or not its local HTTP server is on.
+      exec: (call, caller) => {
+        if (!agentBridge) throw new Error('agent bridge unavailable')
+        return agentBridge.exec(call, caller)
+      },
+      log: { info: (m) => log.info(m), warn: (m) => log.warn(m) }
+    })
+    lanNode.on('changed', sendLanState)
+    lanNode.on('paired', (d: { name: string }) => sendToRenderer(mainWindow, 'lan:paired', d))
+  }
+  if (getSettings().lanEnabled) {
+    lanNode.start().catch((e) => log.error(`lan failed to start: ${(e as Error).message}`))
+  } else {
+    lanNode.stop()
+  }
+}
+
+/** The MCP server script (mcp.ts), outside the asar so a plain node process can read it. */
+function mcpScriptPath(): string {
+  const p = join(app.getAppPath(), 'out', 'main', 'mcp.js')
+  return app.isPackaged ? p.replace(/app\.asar(?=[\\/])/, 'app.asar.unpacked') : p
+}
+
+/** What the renderer may ask of a paired PC: look at the tabs this PC opened there, or close one. */
+function sanitizeLanCall(value: unknown): BridgeCall | null {
+  if (!value || typeof value !== 'object') return null
+  const v = value as Record<string, unknown>
+  if (v.kind !== 'list' && v.kind !== 'screen' && v.kind !== 'close') return null
+  return {
+    kind: v.kind,
+    id: typeof v.id === 'string' ? v.id.slice(0, 64) : undefined,
+    body: {},
+    lines: typeof v.lines === 'number' ? v.lines : undefined
   }
 }
 let tray: Tray | null = null
@@ -328,6 +381,8 @@ function registerIpc(): void {
     const next = updateSettings(patch)
     setRuntimePrefs(next.runtimePrefs)
     if (typeof patch?.agentBridge === 'boolean') syncAgentBridge()
+    if (typeof patch?.lanEnabled === 'boolean') syncLan()
+    if (typeof patch?.lanDeviceName === 'string') sendLanState()
     return next
   })
   // Read back from the OS every time rather than caching: the user can turn
@@ -397,17 +452,41 @@ function registerIpc(): void {
     setHookEnabled(String(id), enabled === true)
   )
 
-  // 每日代辦事項
-  ipcMain.handle('todos:list', () => listTodos())
-  ipcMain.handle('todos:add', (_e, texts: string[], date?: string) =>
-    addTodos(Array.isArray(texts) ? texts : [String(texts ?? '')], date || undefined)
+  // 內網裝置 (lan.ts). lanNode exists from startup on (syncLan), running or not.
+  const lan = (): LanNode => {
+    if (!lanNode) throw new Error('內網連線尚未初始化')
+    return lanNode
+  }
+  ipcMain.handle('lan:state', () => ({ status: lan().status(), devices: lan().devices() }))
+  ipcMain.handle('lan:startPairing', () => lan().startPairing())
+  ipcMain.handle('lan:cancelPairing', () => lan().cancelPairing())
+  ipcMain.handle('lan:pair', (_e, target: unknown, code: unknown) => {
+    const t = (target && typeof target === 'object' ? target : {}) as Record<string, unknown>
+    return lan().pair(
+      {
+        deviceId: typeof t.deviceId === 'string' ? t.deviceId : undefined,
+        address: typeof t.address === 'string' ? t.address : undefined
+      },
+      String(code ?? '')
+    )
+  })
+  ipcMain.handle('lan:probe', (_e, address: unknown) => lan().probe(String(address ?? '')))
+  ipcMain.handle('lan:unpair', (_e, id: unknown) => lan().unpair(String(id ?? '')))
+  ipcMain.handle('lan:setAllowWrite', (_e, id: unknown, allow: unknown) =>
+    lan().setAllowWrite(String(id ?? ''), allow === true)
   )
-  ipcMain.handle('todos:setDone', (_e, id: string, done: boolean) => setTodoDone(id, done))
-  ipcMain.handle('todos:updateText', (_e, id: string, text: string) => updateTodoText(id, text))
-  ipcMain.handle('todos:remove', (_e, id: string) => removeTodo(id))
-  ipcMain.handle('todos:clearDone', () => clearDoneTodos())
-  // Shown in the panel so the skill's target file is discoverable from the UI.
-  ipcMain.handle('todos:path', () => todosPath())
+  ipcMain.handle('lan:call', (_e, deviceId: unknown, call: unknown) => {
+    const c = sanitizeLanCall(call)
+    if (!c) throw new Error('不允許的操作')
+    return lan().call(String(deviceId ?? ''), c)
+  })
+  // For the MCP section: how an AI CLI launches mcp.ts with this very exe.
+  ipcMain.handle('lan:mcpInfo', () => ({
+    exe: process.execPath,
+    script: mcpScriptPath(),
+    bridgeFile: bridgeInfoFile(),
+    bridgeOn: getSettings().agentBridge
+  }))
 
   // 知識庫 — 'note' (freeform lessons/SOPs) and 'db' (SQLite registry entries)
   // share one file and one panel, split by a tab in the UI.
@@ -562,10 +641,10 @@ if (!app.requestSingleInstanceLock()) {
     registerIpc()
     wirePtyEvents()
     syncAgentBridge()
-    // A Claude session edits todos.json directly (see the daily-todos skill),
-    // so the panel follows the file rather than only its own writes.
-    watchTodos(() => sendToRenderer(mainWindow, 'todos:changed', listTodos()))
-    // Same idea for knowledge.json (see the knowledge-capture skill).
+    syncLan()
+    // A Claude session edits knowledge.json directly (see the
+    // knowledge-capture skill), so the panel follows the file rather than
+    // only its own writes.
     watchKnowledge(() => sendToRenderer(mainWindow, 'knowledge:changed', listKnowledge()))
     tray = createTray({
       onShow: showMainWindow,
@@ -596,6 +675,7 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   quitting = true
   agentBridge?.stop()
+  lanNode?.stop()
   ptyManager.killAll()
   log.info('quitting')
 })

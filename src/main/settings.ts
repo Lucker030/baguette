@@ -61,8 +61,16 @@ function defaults(): AppSettings {
     terminalFontSize: TERMINAL_FONT_SIZE_DEFAULT,
     checkUpdatesOnLaunch: true,
     runtimePrefs: {},
-    autoApprove: {}
+    autoApprove: {},
+    // Off until the user turns it on: it opens a port to the whole LAN.
+    lanEnabled: false,
+    lanDeviceName: ''
   }
+}
+
+/** A device name as shown to other PCs: one line, bounded. */
+function cleanDeviceName(value: unknown): string {
+  return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, 40) : ''
 }
 
 /** Clamp to the supported range; anything non-numeric falls back to the default. */
@@ -149,7 +157,9 @@ function load(): AppSettings {
       terminalFontSize: clampFontSize(parsed.terminalFontSize),
       runtimePrefs: normalizeRuntimePrefs(parsed.runtimePrefs),
       checkUpdatesOnLaunch: parsed.checkUpdatesOnLaunch ?? true,
-      autoApprove: normalizeAutoApprove(parsed.autoApprove)
+      autoApprove: normalizeAutoApprove(parsed.autoApprove),
+      lanEnabled: parsed.lanEnabled === true,
+      lanDeviceName: cleanDeviceName(parsed.lanDeviceName)
     }
   } catch {
     cache = defaults()
@@ -191,6 +201,8 @@ export function updateSettings(patch: Partial<AppSettings>): AppSettings {
   if (typeof patch?.agentBridge === 'boolean') next.agentBridge = patch.agentBridge
   if (typeof patch?.terminalFontSize === 'number') next.terminalFontSize = clampFontSize(patch.terminalFontSize)
   if (typeof patch?.checkUpdatesOnLaunch === 'boolean') next.checkUpdatesOnLaunch = patch.checkUpdatesOnLaunch
+  if (typeof patch?.lanEnabled === 'boolean') next.lanEnabled = patch.lanEnabled
+  if (typeof patch?.lanDeviceName === 'string') next.lanDeviceName = cleanDeviceName(patch.lanDeviceName)
   if (patch?.currentAccountId === null || typeof patch?.currentAccountId === 'string') {
     next.currentAccountId = patch.currentAccountId
   }

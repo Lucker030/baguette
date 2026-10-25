@@ -167,10 +167,64 @@ export interface AppSettings {
    * (see AUTO_APPROVE_PROVIDERS). Read-only agent-bridge tabs are never affected.
    */
   autoApprove: Partial<Record<Provider, boolean>>
+  /** LAN control (main/lan.ts): listen for paired PCs and find others. */
+  lanEnabled: boolean
+  /** How this PC is shown to the others; empty = the computer name. */
+  lanDeviceName: string
 }
 
 /** Providers whose CLI has a switch to approve every permission request. */
 export const AUTO_APPROVE_PROVIDERS: Provider[] = ['antigravity']
+
+/** A baguette on the LAN: paired, or just heard announcing itself. */
+export interface LanDevice {
+  id: string
+  name: string
+  address?: string
+  port?: number
+  paired: boolean
+  online: boolean
+  /** Paired only: this PC lets it open writable tabs here. */
+  allowWrite?: boolean
+  version?: string
+}
+
+export interface LanStatus {
+  running: boolean
+  deviceId: string
+  deviceName: string
+  port?: number
+  /** This PC's IPv4 addresses, for typing in on the other side. */
+  addresses: string[]
+  /** The code shown while this PC accepts pairing. */
+  pairing: { code: string; expiresAt: number } | null
+  error?: string
+}
+
+export interface LanState {
+  status: LanStatus
+  devices: LanDevice[]
+}
+
+/** How an AI CLI launches the MCP server (main/mcp.ts) with this baguette's own exe. */
+export interface McpInfo {
+  exe: string
+  script: string
+  bridgeFile: string
+  /** The MCP server talks to the local agent bridge, so it needs to be on. */
+  bridgeOn: boolean
+}
+
+/** A bridge tab on a paired PC, as its bridge describes it (agent-bridge.ts describe()). */
+export interface LanRemoteTab {
+  id: string
+  provider: Provider
+  name: string
+  status: string
+  readOnly: boolean
+  exited: boolean
+  screen?: string
+}
 
 /** Outcome of asking GitHub Releases for a newer build — see main/updater.ts. */
 export interface UpdateCheckResult {
@@ -338,32 +392,11 @@ export interface SkillInfo {
 }
 
 /**
- * One entry on the daily to-do list.
- *
- * Stored flat in userData/todos.json so a Claude Code session can append to it
- * directly (see the `daily-todos` skill) — the shape is meant to be obvious to
- * hand-write, and main/todos.ts normalizes anything missing on read.
- */
-export interface TodoItem {
-  id: string
-  /** Local calendar day, YYYY-MM-DD. */
-  date: string
-  text: string
-  done: boolean
-  /** Optional detail — e.g. the context Claude captured when assigning it. */
-  note?: string
-  /** Where it came from, so app-typed and assigned items are distinguishable. */
-  source: 'app' | 'claude'
-  createdAt: number
-}
-
-/**
  * One entry in the knowledge base.
  *
  * Stored flat in userData/knowledge.json so a Claude Code session can append
- * to it directly (see the `knowledge-capture` skill) — same convention as
- * `TodoItem`: obvious to hand-write, and main/knowledge.ts normalizes
- * anything missing on read.
+ * to it directly (see the `knowledge-capture` skill): obvious to hand-write,
+ * and main/knowledge.ts normalizes anything missing on read.
  *
  * Two kinds share one file and one panel, switched by a tab in the UI:
  * `'note'` is a freeform lesson/SOP/writeup; `'db'` documents one SQLite
