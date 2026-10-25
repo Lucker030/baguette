@@ -180,8 +180,21 @@ const SYNC_LABELS: Record<SyncCategory, string> = { knowledge: '知識庫', skil
 
 function SyncRow({ device }: { device: LanDevice }): JSX.Element {
   const [error, setError] = useState('')
+  const [starting, setStarting] = useState(false)
   const pr = device.syncProgress
   const active = pr && (pr.phase === 'scan' || pr.phase === 'transfer')
+  const anyTicked = SYNC_CATEGORIES.some((c) => device.sync?.[c]?.mine)
+  const start = async (): Promise<void> => {
+    setError('')
+    setStarting(true)
+    try {
+      await window.api.syncLanNow(device.id)
+    } catch (err) {
+      setError(errorText(err))
+    } finally {
+      setStarting(false)
+    }
+  }
   const pct = pr && pr.total > 0 ? Math.round((pr.done / pr.total) * 100) : pr?.phase === 'done' ? 100 : 0
   return (
     <div className="space-y-1.5 border-t border-line px-3 py-2">
@@ -190,7 +203,7 @@ function SyncRow({ device }: { device: LanDevice }): JSX.Element {
         {SYNC_CATEGORIES.map((c) => {
           const s = device.sync?.[c]
           return (
-            <label key={c} className="flex cursor-pointer items-center gap-1" title="兩台都勾才會同步；從別台來的 hook 預設停用">
+            <label key={c} className="flex cursor-pointer items-center gap-1" title="兩台都勾的項目，按「開始同步」才會同步；從別台來的 hook 預設停用">
               <input
                 type="checkbox"
                 checked={s?.mine === true}
@@ -205,6 +218,13 @@ function SyncRow({ device }: { device: LanDevice }): JSX.Element {
             </label>
           )
         })}
+        <button
+          onClick={() => void start()}
+          disabled={!anyTicked || starting || Boolean(active)}
+          className={`${BTN_PRIMARY} ml-auto`}
+        >
+          {starting || active ? '同步中…' : '開始同步'}
+        </button>
       </div>
       {pr && (
         <div className="flex items-center gap-2 text-[11px] text-txt-dim">

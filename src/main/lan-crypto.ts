@@ -196,7 +196,11 @@ export class FrameCipher {
   }
 }
 
-export const MAX_FRAME = 8 * 1024 * 1024
+/**
+ * Largest frame either side accepts. A skill may be 5MB (lan-sync-adapters.ts
+ * SKILL_LIMITS), base64 inside JSON adds a third: well under this, with room.
+ */
+export const MAX_FRAME = 32 * 1024 * 1024
 
 /** A 4-byte big-endian length, then the payload. */
 export function encodeFrame(payload: Buffer): Buffer {

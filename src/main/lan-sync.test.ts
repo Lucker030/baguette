@@ -69,7 +69,8 @@ function pair(aRecs: Rec[], bRecs: Rec[], aKnowsBTicked = true) {
   const quiet = { info: () => {}, warn: () => {} }
   const a = memoryStore(aRecs)
   const b = memoryStore(bRecs)
-  const bases = new Map<string, Hashes>()
+  /** Each PC's own stored bases. */
+  const bases = { a: new Map<string, Hashes>(), b: new Map<string, Hashes>() }
   const peerOf = (id: string, name: string, mine: boolean, theirs: boolean): SyncPeer => ({
     id,
     name,
@@ -91,13 +92,13 @@ function pair(aRecs: Rec[], bRecs: Rec[], aKnowsBTicked = true) {
       setTheirs: (_id, flags) => void (known[me] = flags.knowledge === true),
       request: (_id, method, params) => nodes[other].serve(`id-${me}`, method, JSON.parse(JSON.stringify(params))),
       adapters,
-      bases: { get: (p, c) => (me === 'a' ? (bases.get(`${p}/${c}`) ?? null) : null), set: (p, c, v) => void bases.set(`${p}/${c}`, v) },
+      bases: { get: (p, c) => bases[me].get(`${p}/${c}`) ?? null, set: (p, c, v) => void bases[me].set(`${p}/${c}`, v) },
       log: quiet
     })
   }
   nodes.a = make('a', a)
   nodes.b = make('b', b)
-  return { a, b, run: () => nodes.a.syncPeer('id-b'), nodes, ticks }
+  return { a, b, run: () => nodes.a.syncNow('id-b'), nodes, ticks, bases }
 }
 
 describe('LanSync between two PCs', () => {
@@ -109,7 +110,7 @@ describe('LanSync between two PCs', () => {
     await run()
     const ids = (m: Map<string, Rec>) => [...m.keys()].sort()
     expect(ids(a.items)).toEqual(ids(b.items))
-    expect(a.items.get('x')?.text).toBe('mine') // the coordinator (smaller id) keeps the key
+    expect(a.items.get('x')?.text).toBe('mine') // the PC that pressed 開始同步 keeps the key
     expect(b.items.get('x')?.text).toBe('mine')
     expect(a.items.get('x~idb')?.text).toBe('theirs (from B)')
     expect(b.items.get('x~idb')?.text).toBe('theirs (from B)')
@@ -126,19 +127,36 @@ describe('LanSync between two PCs', () => {
     expect(a.items.get('j')?.text).toBe('edited')
   })
 
-  it("still starts when the other PC's tick never arrived (one-way firewall)", async () => {
+  it("starts even when the other PC's tick never arrived (one-way firewall): 開始同步 asks for it", async () => {
     const { b, nodes } = pair([{ id: 'k', text: '1' }], [], false)
-    nodes.a.tick()
-    await new Promise((r) => setTimeout(r, 50))
-    await nodes.a.syncPeer('id-b')
+    await nodes.a.syncNow('id-b')
     expect(b.items.get('k')?.text).toBe('1')
   })
 
-  it('refuses when the other PC has not ticked the category', async () => {
-    const { a, nodes, ticks } = pair([{ id: 'k', text: '1' }], [])
+  it('lets either PC start, using the base the other one stored', async () => {
+    const { a, b, nodes, bases } = pair([{ id: 'k', text: '1' }], [])
+    await nodes.a.syncNow('id-b')
+    expect(bases.b.get('id-a/knowledge')).toEqual(bases.a.get('id-b/knowledge'))
+    // Deleted on B, untouched on A: B starts this time, and the delete goes through.
+    b.items.delete('k')
+    await nodes.b.syncNow('id-a')
+    expect(a.items.has('k')).toBe(false)
+  })
+
+  it('does nothing without ticks on both sides, and says why', async () => {
+    const { a, b, nodes, ticks } = pair([{ id: 'k', text: '1' }], [])
     ticks.b = false
+    await expect(nodes.a.syncNow('id-b')).rejects.toMatchObject({ status: 409, message: '對方還沒勾選同樣的項目' })
     await expect(nodes.b.serve('id-a', 'sync.manifest', { category: 'knowledge' })).rejects.toMatchObject({ status: 403 })
     expect(a.items.size).toBe(1)
+    expect(b.items.size).toBe(0)
+  })
+
+  it('refuses a second run while the other PC is running one with this PC', async () => {
+    const { nodes } = pair([{ id: 'k', text: '1' }], [])
+    await nodes.b.serve('id-a', 'sync.begin', {})
+    await expect(nodes.b.syncNow('id-a')).rejects.toMatchObject({ status: 409 })
+    await nodes.b.serve('id-a', 'sync.end', {})
   })
 })
 
@@ -168,6 +186,14 @@ describe('skillsAdapter', () => {
     expect((await b.manifest()).demo).toBe(ma.demo)
     expect(readFileSync(join(tmp, 'b', 'skills', 'demo', 'scripts', 'run.ps1'), 'utf8')).toBe('x')
     expect(readdirSync(join(tmp, 'b', 'work', 'backup'))).toHaveLength(1)
+  })
+
+  it("leaves out Claude Code's own synced folder", async () => {
+    tmp = mkdtempSync(join(tmpdir(), 'bg-skills-'))
+    const a = skillsAdapter(join(tmp, 'skills'), join(tmp, 'work'))
+    skill(join(tmp, 'skills'), 'synced', { 'manifest.json': '{}' })
+    skill(join(tmp, 'skills'), 'mine', { 'SKILL.md': 'x' })
+    expect(Object.keys(await a.manifest())).toEqual(['mine'])
   })
 
   it('skips a write when the folder changed since planning', async () => {

@@ -94,9 +94,11 @@ noise.
   port, announced over discovery), UDP broadcast 47611. Off by default
   (`lanEnabled`). Secrets in `userData/lan.json` via safeStorage (DPAPI).
 - LAN sync of 知識庫 / Skills / Hook 庫 (`lan-sync.ts`, `lan-sync-adapters.ts`),
-  designed with a Codex review: a category syncs only while BOTH PCs ticked
-  it (checked by the receiver on every call); the smaller device id plans a
-  three-way merge against its stored base (`userData/lan-sync.json`); both-
+  designed with a Codex review: nothing syncs on its own — the user presses
+  開始同步 on either PC and that PC plans; a category syncs only if BOTH PCs
+  ticked it (checked by the receiver on every call); the planner merges
+  three-way against the base both PCs store (`userData/lan-sync.json`, sent
+  over after each run); `skills/synced` (Claude Code's own) is skipped; both-
   changed keeps both versions (copy key), never a timestamp winner; deletes
   only propagate over an untouched copy, and never on a first sync; hooks
   arrive disabled; skills are validated and swapped as whole folders with

@@ -8,13 +8,14 @@ import { SYNC_CATEGORIES } from '../shared/types'
 // - A category syncs only while BOTH PCs ticked it for each other. The PC
 //   receiving a call checks its own tick on every call, so unticking stops a
 //   sync mid-way.
-// - One PC plans: the one with the smaller device id (the coordinator). It
-//   keeps, per peer and category, the hashes both sides agreed on last time
-//   (the base), and merges three-way against it:
+// - Nothing syncs on its own: the user presses 開始同步 on either PC, and
+//   that PC plans the run. Both PCs keep, per peer and category, the hashes
+//   both sides agreed on at the end of the last run (the base; the planner
+//   sends it over), and the planner merges three-way against it:
 //     changed on one side          → copy it over
-//     changed differently on both  → keep both: the coordinator's version
-//                                    keeps the key, the other is stored on
-//                                    both sides under a copy key
+//     changed differently on both  → keep both: the planner's version keeps
+//                                    the key, the other is stored on both
+//                                    sides under a copy key
 //     deleted on one side, untouched on the other → delete; deleted vs edited
 //                                    → the edit wins
 //   No base yet (first sync) → nothing is deleted, only copied. Timestamps are
@@ -94,7 +95,7 @@ export function nextBase(local: Hashes, remote: Hashes, old: Hashes | null): Has
   return out
 }
 
-// ---- the coordinator / responder ----
+// ---- planner / responder ----
 
 export interface SyncPeer {
   id: string
@@ -119,7 +120,8 @@ export interface SyncDeps {
   log: { info(m: string): void; warn(m: string): void }
 }
 
-const AUTO_MS = 60_000
+/** A peer that served a sync call this recently counts as mid-run (it started one with us). */
+const SERVING_MS = 2 * 60_000
 
 function readFlags(v: unknown): Partial<Record<SyncCategory, boolean>> {
   const out: Partial<Record<SyncCategory, boolean>> = {}
@@ -140,27 +142,15 @@ export class SyncError extends Error {
 export class LanSync extends EventEmitter {
   private running = new Map<string, Promise<void>>()
   private progress = new Map<string, LanSyncProgress>()
-  private timer: NodeJS.Timeout | null = null
+  /** When each peer last made a sync call to us (it is running a sync with us). */
+  private serving = new Map<string, number>()
 
   constructor(private readonly deps: SyncDeps) {
     super()
   }
 
-  start(): void {
-    this.timer ??= setInterval(() => this.tick(), AUTO_MS)
-  }
-
-  stop(): void {
-    if (this.timer) clearInterval(this.timer)
-    this.timer = null
-  }
-
   progressOf(peerId: string): LanSyncProgress | undefined {
     return this.progress.get(peerId)
-  }
-
-  private isCoordinator(peerId: string): boolean {
-    return this.deps.myId() < peerId
   }
 
   /** Both PCs ticked it. */
@@ -168,40 +158,18 @@ export class LanSync extends EventEmitter {
     return p.mine[cat] === true && p.theirs[cat] === true
   }
 
+  /** Send this PC's ticks and store the peer's (its reply). Throws when the peer can't be reached. */
+  private async exchangePrefs(peerId: string): Promise<void> {
+    const r = (await this.deps.request(peerId, 'sync.prefs', { flags: this.peer(peerId).mine })) as { flags?: unknown }
+    this.deps.setTheirs(peerId, readFlags(r?.flags))
+    this.emit('changed')
+  }
+
   /**
-   * Every minute, with each peer this PC ticked something for:
-   * exchange ticks (both ways in one call), then re-sync what is active if
-   * this PC coordinates. Exchanging here, not only when a box is clicked,
-   * matters when the LAN only connects one way (a firewall on one PC): a
-   * tick the other PC couldn't deliver still arrives through this call
-   * (seen 2026-10-25: the main PC's network was "Public").
+   * The user ticked or unticked a category for a peer. Ticks only choose
+   * what 開始同步 will sync; nothing starts here. Telling the peer is best
+   * effort: 開始同步 exchanges ticks again anyway.
    */
-  tick(): void {
-    // Not gated on "online": that comes from hearing the peer's broadcasts,
-    // which the same firewall can block while a connection out still works.
-    for (const p of this.deps.peers()) {
-      if (!SYNC_CATEGORIES.some((c) => p.mine[c])) continue
-      void this.exchangePrefs(p.id, true).then((reached) => {
-        const now = this.peer(p.id)
-        if (reached && this.isCoordinator(p.id) && SYNC_CATEGORIES.some((c) => this.active(now, c))) void this.syncPeer(p.id)
-      })
-    }
-  }
-
-  /** Send this PC's ticks, store the peer's (its reply). False if it couldn't be reached. */
-  private async exchangePrefs(peerId: string, quiet = false): Promise<boolean> {
-    try {
-      const r = (await this.deps.request(peerId, 'sync.prefs', { flags: this.peer(peerId).mine })) as { flags?: unknown }
-      this.deps.setTheirs(peerId, readFlags(r?.flags))
-      this.emit('changed')
-      return true
-    } catch (e) {
-      if (!quiet) this.deps.log.warn(`sync: could not exchange ticks with ${peerId}: ${(e as Error).message}`)
-      return false
-    }
-  }
-
-  /** The user ticked or unticked a category for a peer. */
   async setEnabled(peerId: string, cat: SyncCategory, on: boolean): Promise<void> {
     if (on) {
       const other = this.deps.peers().find((p) => p.id !== peerId && p.mine[cat])
@@ -209,9 +177,36 @@ export class LanSync extends EventEmitter {
     }
     this.deps.setMine(peerId, cat, on)
     if (!this.deps.peers().some((p) => p.id === peerId)) return
-    // Undelivered (peer off, or this way blocked)? tick() retries every minute.
-    await this.exchangePrefs(peerId)
-    if (on && this.isCoordinator(peerId) && this.active(this.peer(peerId), cat)) void this.syncPeer(peerId)
+    try {
+      await this.exchangePrefs(peerId)
+    } catch (e) {
+      this.deps.log.warn(`sync: could not tell ${peerId} about the change: ${(e as Error).message}`)
+    }
+  }
+
+  /**
+   * 開始同步: sync every category both PCs ticked, planned by this PC.
+   * Either PC can start one; a PC that is already in a run with this peer
+   * (either side of it) refuses a second.
+   */
+  async syncNow(peerId: string): Promise<void> {
+    const existing = this.running.get(peerId)
+    if (existing) return existing
+    if (Date.now() - (this.serving.get(peerId) ?? 0) < SERVING_MS) throw new SyncError(409, '對方正在和這台同步，請稍候')
+    try {
+      await this.exchangePrefs(peerId)
+    } catch (e) {
+      throw new SyncError(502, `連不到對方：${(e as Error).message}`)
+    }
+    const p = this.peer(peerId)
+    const cats = SYNC_CATEGORIES.filter((c) => this.active(p, c))
+    if (!cats.length) {
+      const waiting = SYNC_CATEGORIES.filter((c) => p.mine[c] && !p.theirs[c])
+      throw new SyncError(409, waiting.length ? '對方還沒勾選同樣的項目' : '請先勾選要同步的項目')
+    }
+    const run = this.runPeer(peerId, cats).finally(() => this.running.delete(peerId))
+    this.running.set(peerId, run)
+    return run
   }
 
   private peer(id: string): SyncPeer {
@@ -226,9 +221,17 @@ export class LanSync extends EventEmitter {
     if (method === 'sync.prefs') {
       this.deps.setTheirs(peerId, readFlags(p.flags))
       this.emit('changed')
-      // The coordinator starts as soon as both sides agree.
-      if (this.isCoordinator(peerId)) void this.syncPeer(peerId)
       return { flags: this.peer(peerId).mine }
+    }
+    if (method === 'sync.begin') {
+      // Both PCs pressed 開始同步 at once: only one run may go ahead.
+      if (this.running.has(peerId)) throw new SyncError(409, '對方也正在發起同步，請稍候再試')
+      this.serving.set(peerId, Date.now())
+      return {}
+    }
+    if (method === 'sync.end') {
+      this.serving.delete(peerId)
+      return {}
     }
     if (method === 'sync.progress') {
       const pr = p as unknown as LanSyncProgress
@@ -246,7 +249,16 @@ export class LanSync extends EventEmitter {
     if (!cat) throw new SyncError(400, 'unknown category')
     // The gate: this PC's own tick, checked on every call.
     if (this.peer(peerId).mine[cat] !== true) throw new SyncError(403, '對方沒有勾選同步這一類')
+    this.serving.set(peerId, Date.now())
     const adapter = this.deps.adapters[cat]
+    if (method === 'sync.base') {
+      // The planner's agreed base, kept here too so either PC can plan next time.
+      const raw = (p.base && typeof p.base === 'object' ? p.base : {}) as Record<string, unknown>
+      const base: Hashes = {}
+      for (const [k, v] of Object.entries(raw)) if (typeof v === 'string') base[k] = v
+      this.deps.bases.set(peerId, cat, base)
+      return {}
+    }
     if (method === 'sync.manifest') return adapter.manifest()
     if (method === 'sync.read') {
       const keys = Array.isArray(p.keys) ? p.keys.filter((k): k is string => typeof k === 'string').slice(0, 500) : []
@@ -264,27 +276,28 @@ export class LanSync extends EventEmitter {
     throw new SyncError(404, `unknown method ${method}`)
   }
 
-  /** One sync run with a peer over every active category; runs never overlap. */
-  syncPeer(peerId: string): Promise<void> {
-    const existing = this.running.get(peerId)
-    if (existing) return existing
-    const run = this.runPeer(peerId).finally(() => this.running.delete(peerId))
-    this.running.set(peerId, run)
-    return run
-  }
-
-  private async runPeer(peerId: string): Promise<void> {
-    for (const cat of SYNC_CATEGORIES) {
-      const p = this.peer(peerId)
-      if (!this.active(p, cat)) continue
-      try {
-        await this.syncCategory(p, cat)
-      } catch (e) {
-        const message = e instanceof Error ? e.message : String(e)
-        this.deps.log.warn(`sync ${cat} with ${p.name}: ${message}`)
-        this.report(peerId, { category: cat, phase: 'error', done: 0, total: 0, error: message, at: Date.now() })
-        return
+  private async runPeer(peerId: string, cats: SyncCategory[]): Promise<void> {
+    try {
+      await this.deps.request(peerId, 'sync.begin', {})
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e)
+      this.setProgress(peerId, { category: cats[0], phase: 'error', done: 0, total: 0, error: message, at: Date.now() })
+      throw e
+    }
+    try {
+      for (const cat of cats) {
+        const p = this.peer(peerId)
+        try {
+          await this.syncCategory(p, cat)
+        } catch (e) {
+          const message = e instanceof Error ? e.message : String(e)
+          this.deps.log.warn(`sync ${cat} with ${p.name}: ${message}`)
+          this.report(peerId, { category: cat, phase: 'error', done: 0, total: 0, error: message, at: Date.now() })
+          return
+        }
       }
+    } finally {
+      void this.deps.request(peerId, 'sync.end', {}).catch(() => {})
     }
   }
 
@@ -351,8 +364,8 @@ export class LanSync extends EventEmitter {
         const [ok] = await applyRemote([{ key, payload: null, expect: remote[key] }])
         step(ok)
       } else {
-        // Both changed: the coordinator's (this PC's) version keeps the key;
-        // the peer's becomes a copy on both sides.
+        // Both changed: the version on the PC that started the run keeps the
+        // key; the peer's becomes a copy on both sides.
         const r = await fetch('remote', [key])
         const l = await fetch('local', [key])
         if (!(key in r) || !(key in l)) {
@@ -373,9 +386,15 @@ export class LanSync extends EventEmitter {
     // Agree on the new base from what both sides now actually hold.
     const after = await adapter.manifest()
     const afterRemote = (await call('sync.manifest', {})) as Hashes
-    this.deps.bases.set(p.id, cat, nextBase(after, afterRemote, base))
+    const agreed = nextBase(after, afterRemote, base)
+    this.deps.bases.set(p.id, cat, agreed)
+    try {
+      await call('sync.base', { base: agreed })
+    } catch (e) {
+      this.deps.log.warn(`sync ${cat}: could not store the base on ${p.name}: ${(e as Error).message}`)
+    }
     if (failed) {
-      this.report(p.id, { category: cat, phase: 'error', done, total, error: `${failed} 項沒有同步（對方或這台正在修改，或內容不允許），下一輪再試`, at: Date.now() })
+      this.report(p.id, { category: cat, phase: 'error', done, total, error: `${failed} 項沒有同步（對方或這台正在修改，或內容不允許），再按一次開始同步`, at: Date.now() })
     } else {
       this.report(p.id, { category: cat, phase: 'done', done, total, at: Date.now() })
     }

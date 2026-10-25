@@ -226,10 +226,8 @@ function syncLan(): void {
   }
   if (getSettings().lanEnabled) {
     lanNode.start().catch((e) => log.error(`lan failed to start: ${(e as Error).message}`))
-    lanSync?.start()
   } else {
     lanNode.stop()
-    lanSync?.stop()
   }
 }
 
@@ -542,7 +540,10 @@ function registerIpc(): void {
     if (!c || !lanSync) throw new Error('不允許的操作')
     return lanSync.setEnabled(String(id ?? ''), c, on === true)
   })
-  ipcMain.handle('lan:syncNow', (_e, id: unknown) => lanSync?.syncPeer(String(id ?? '')))
+  ipcMain.handle('lan:syncNow', (_e, id: unknown) => {
+    if (!lanSync) throw new Error('內網連線尚未初始化')
+    return lanSync.syncNow(String(id ?? ''))
+  })
   ipcMain.handle('lan:startPairing', () => lan().startPairing())
   ipcMain.handle('lan:cancelPairing', () => lan().cancelPairing())
   ipcMain.handle('lan:pair', (_e, target: unknown, code: unknown) => {
