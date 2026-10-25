@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { SyncCategory } from '../shared/types'
 import { LanSync, nextBase, plan, type Hashes, type SyncPeer } from './lan-sync'
-import { recordAdapter, skillsAdapter, validateSkill } from './lan-sync-adapters'
+import { distributeSkills, recordAdapter, skillsAdapter, validateSkill } from './lan-sync-adapters'
 
 // The merge rules pinned here are the ones whose failure loses data: an edit
 // overwritten, a deletion that resurrects, or a first sync that deletes.
@@ -186,6 +186,16 @@ describe('skillsAdapter', () => {
     expect((await b.manifest()).demo).toBe(ma.demo)
     expect(readFileSync(join(tmp, 'b', 'skills', 'demo', 'scripts', 'run.ps1'), 'utf8')).toBe('x')
     expect(readdirSync(join(tmp, 'b', 'work', 'backup'))).toHaveLength(1)
+  })
+
+  it("copies each skill's SKILL.md to every AI's folder, like install.ps1", () => {
+    tmp = mkdtempSync(join(tmpdir(), 'bg-skills-'))
+    skill(join(tmp, 'src'), 'demo', { 'SKILL.md': 'md', 'scripts/run.ps1': 'x' })
+    skill(join(tmp, 'src'), 'no-md', { 'readme.txt': 'x' })
+    const names = distributeSkills(join(tmp, 'src'), [join(tmp, 't1'), join(tmp, 't2')])
+    expect(names).toEqual(['demo'])
+    expect(readFileSync(join(tmp, 't2', 'demo', 'SKILL.md'), 'utf8')).toBe('md')
+    expect(existsSync(join(tmp, 't1', 'demo', 'scripts'))).toBe(false)
   })
 
   it("leaves out Claude Code's own synced folder", async () => {

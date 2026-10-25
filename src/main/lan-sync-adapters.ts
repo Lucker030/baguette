@@ -95,6 +95,29 @@ export function backupFile(file: string, dir: string, keep = 20): void {
 
 // ---- skills (folders) ----
 
+/**
+ * Copy each skill's SKILL.md from `src` into every AI's skill folder — what
+ * ~/.agents/skills/install.ps1 does on the user's main PC, done here so a PC
+ * that received skills by sync (and has no install.ps1) can use them too.
+ * Scripts stay in `src`; the copies point back at them. Returns the names.
+ */
+export function distributeSkills(src: string, targets: string[]): string[] {
+  if (!existsSync(src)) return []
+  const names: string[] = []
+  for (const name of readdirSync(src)) {
+    const md = join(src, name, 'SKILL.md')
+    if (name.startsWith('.') || !safeSegment(name) || !existsSync(md)) continue
+    const st = lstatSync(join(src, name))
+    if (!st.isDirectory() || st.isSymbolicLink()) continue
+    for (const t of targets) {
+      mkdirSync(join(t, name), { recursive: true })
+      writeFileSync(join(t, name, 'SKILL.md'), readFileSync(md))
+    }
+    names.push(name)
+  }
+  return names
+}
+
 export const SKILL_LIMITS = { files: 500, fileBytes: 4 * 1024 * 1024, totalBytes: 5 * 1024 * 1024 }
 
 const RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i

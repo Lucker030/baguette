@@ -399,5 +399,7 @@ export class LanSync extends EventEmitter {
       this.report(p.id, { category: cat, phase: 'done', done, total, at: Date.now() })
     }
     if (total) this.deps.log.info(`sync ${cat} with ${p.name}: ${total - failed}/${total} applied`)
+    // This PC's own changes (pulls) need the same follow-up as the peer's.
+    if (total - failed > 0) this.emit('applied', cat)
   }
 }

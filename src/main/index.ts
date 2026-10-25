@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain, shell, dialog, clipboard, Notification, nativeImage } from 'electron'
 import type { Tray } from 'electron'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import os from 'node:os'
 import { join } from 'node:path'
@@ -18,7 +18,7 @@ import { checkForUpdate, installUpdate, RELEASES_PAGE } from './updater'
 import { LanNode } from './lan'
 import { lanStore } from './lan-store'
 import { LanSync, type Hashes } from './lan-sync'
-import { backupFile, recordAdapter, skillsAdapter } from './lan-sync-adapters'
+import { backupFile, distributeSkills, recordAdapter, skillsAdapter } from './lan-sync-adapters'
 import { writeFileAtomic } from './atomic-write'
 import {
   addKnowledge,
@@ -155,15 +155,37 @@ function syncBases(): { get(peer: string, cat: SyncCategory): Hashes | null; set
       return {}
     }
   }
+  // Skills moved from ~/.claude/skills to ~/.agents/skills (1.0.3): a base
+  // taken over the old folder must not be read as the new one's, or an
+  // unchanged-looking name could be taken for a deletion.
+  const key = (peer: string, cat: SyncCategory): string => `${peer}/${cat === 'skills' ? 'skills@agents' : cat}`
   return {
-    get: (peer, cat) => read()[`${peer}/${cat}`] ?? null,
-    set: (peer, cat, base) => writeFileAtomic(file, JSON.stringify({ ...read(), [`${peer}/${cat}`]: base }))
+    get: (peer, cat) => read()[key(peer, cat)] ?? null,
+    set: (peer, cat, base) => writeFileAtomic(file, JSON.stringify({ ...read(), [key(peer, cat)]: base }))
   }
+}
+
+/** Every AI's skill folder, the same list as ~/.agents/skills/install.ps1. */
+function skillTargets(): string[] {
+  const home = os.homedir()
+  const accounts = join(app.getPath('userData'), 'accounts')
+  const targets = [
+    join(home, '.claude', 'skills'), // Claude Code (default account)
+    join(accounts, 'personal', 'skills'), // Claude Code (baguette personal)
+    join(home, '.codex', 'skills'), // Codex (default)
+    join(home, '.gemini', 'config', 'skills') // Antigravity (global)
+  ]
+  // Codex, each baguette account that has been set up.
+  const codex = join(accounts, 'codex')
+  if (existsSync(codex)) {
+    for (const d of readdirSync(codex)) if (existsSync(join(codex, d, 'config.toml'))) targets.push(join(codex, d, 'skills'))
+  }
+  return targets
 }
 
 function createLanSync(node: LanNode): LanSync {
   const backups = join(app.getPath('userData'), 'sync-backup')
-  const claudeDir = join(os.homedir(), '.claude')
+  const agentsDir = join(os.homedir(), '.agents')
   const sync = new LanSync({
     myId: () => node.deviceId,
     peers: () => node.syncPeers(),
@@ -186,7 +208,10 @@ function createLanSync(node: LanNode): LanSync {
         asCopy: (h, id, from) => ({ ...h, id, name: `${h.name}（來自 ${from}）` }),
         backup: () => backupFile(join(app.getPath('userData'), 'hooks.json'), backups)
       }),
-      skills: skillsAdapter(join(claudeDir, 'skills'), join(claudeDir, '.baguette-sync'), (name, reason) =>
+      // The user keeps skills in ~/.agents/skills and distributes them to each
+      // AI from there (install.ps1), so that is what syncs; ~/.claude/skills
+      // is a generated copy. Work/backups sit beside it, on the same disk.
+      skills: skillsAdapter(join(agentsDir, 'skills'), join(agentsDir, '.baguette-sync'), (name, reason) =>
         log.warn(`sync: skill ${name} skipped: ${reason}`)
       )
     },
@@ -197,6 +222,14 @@ function createLanSync(node: LanNode): LanSync {
   // The knowledge panel ignores the file watcher for our own writes; tell it.
   sync.on('applied', (cat: SyncCategory) => {
     if (cat === 'knowledge') sendToRenderer(mainWindow, 'knowledge:changed', listKnowledge())
+    if (cat === 'skills') {
+      try {
+        const names = distributeSkills(join(agentsDir, 'skills'), skillTargets())
+        log.info(`sync: distributed skills ${names.join(', ')}`)
+      } catch (e) {
+        log.warn(`sync: could not distribute skills: ${(e as Error).message}`)
+      }
+    }
   })
   return sync
 }

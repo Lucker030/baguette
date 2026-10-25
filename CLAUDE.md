@@ -98,7 +98,9 @@ noise.
   開始同步 on either PC and that PC plans; a category syncs only if BOTH PCs
   ticked it (checked by the receiver on every call); the planner merges
   three-way against the base both PCs store (`userData/lan-sync.json`, sent
-  over after each run); `skills/synced` (Claude Code's own) is skipped; both-
+  over after each run); Skills sync `~/.agents/skills` (the user's source;
+  received skills are then distributed like its install.ps1 —
+  `distributeSkills`), `skills/synced` (Claude Code's own) is skipped; both-
   changed keeps both versions (copy key), never a timestamp winner; deletes
   only propagate over an untouched copy, and never on a first sync; hooks
   arrive disabled; skills are validated and swapped as whole folders with
