@@ -204,6 +204,8 @@ describe('skillsAdapter', () => {
     skill(join(tmp, 'skills'), 'synced', { 'manifest.json': '{}' })
     skill(join(tmp, 'skills'), 'mine', { 'SKILL.md': 'x' })
     expect(Object.keys(await a.manifest())).toEqual(['mine'])
+    const payload = { files: [{ path: 'manifest.json', data: Buffer.from('{}').toString('base64') }] }
+    expect(await a.apply([{ key: 'synced', payload, expect: null }])).toEqual([false])
   })
 
   it('skips a write when the folder changed since planning', async () => {

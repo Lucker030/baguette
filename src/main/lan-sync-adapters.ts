@@ -237,7 +237,10 @@ export function skillsAdapter(root: string, work: string, onSkip?: (name: string
   }
 
   const applyOne = (c: SyncChange): boolean => {
-    if (!safeSegment(c.key) || c.key.startsWith('.')) return false
+    // Writes are refused for exactly what manifest() leaves out, so a peer
+    // syncing another folder (an older build: ~/.claude/skills) can't plant
+    // Claude Code's `synced` here (seen 2026-10-25).
+    if (!safeSegment(c.key) || c.key.startsWith('.') || c.key === 'synced') return false
     let now: string | null
     try {
       now = currentHash(c.key)
