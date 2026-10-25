@@ -481,6 +481,8 @@ function registerIpc(): void {
       autoOpenLoginUrl: opts?.autoOpenLoginUrl === true,
       launch: sanitizeLaunch(opts?.launch),
       readOnly: opts?.readOnly === true,
+      // From settings only: the renderer can't ask for it per tab.
+      autoApprove: opts?.readOnly !== true && settings.autoApprove?.[provider] === true,
       cols: typeof opts?.cols === 'number' ? opts.cols : undefined,
       rows: typeof opts?.rows === 'number' ? opts.rows : undefined
     }

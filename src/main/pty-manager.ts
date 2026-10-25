@@ -8,6 +8,7 @@ import type { CreateSessionOptions, SessionInfo, SessionLaunch } from '../shared
 import { ACCOUNT_DIR_ENV, isAccountProvider } from '../shared/types'
 import { ActivityTracker } from './activity'
 import { AUTH_TAIL_KEEP, classifyAuthOutput, watchCredentials } from './auth-watch'
+import { modeArgs } from './launch-mode'
 import {
   resolveClaudeLaunch,
   resolveLaunch,
@@ -107,35 +108,6 @@ function launchArgs(
     return { extraArgs: launch.kind === 'new' ? [] : ['--continue'] }
   }
   return { extraArgs: [] }
-}
-
-/**
- * Flags that start a CLI without the ability to change anything: Claude Code's
- * plan mode, Codex's read-only sandbox, agy's plan mode. Used for tabs another
- * agent opens through the agent bridge (agent-bridge.ts), so a conversation
- * the user is only watching can't edit files or run commands behind their back.
- * They go BEFORE the launch args: `codex resume <id>` is a subcommand, and its
- * global flags have to precede it.
- *
- * Read-only alone is not enough: each CLI can ASK to step outside it (Codex:
- * "run this outside the sandbox?", Claude: leave plan mode), and the default
- * answer is yes — so the bridge's own Enter, sent with every message, would
- * approve it (verified with Codex). So the escape hatches are shut too: Codex
- * never asks, Claude doesn't get the tools that write or leave plan mode. agy
- * has no "never ask" switch; its terminal sandbox is the most it offers.
- * `--disallowedTools=` keeps Claude's variadic flag from eating what follows.
- */
-function readOnlyArgs(provider: CreateSessionOptions['provider']): string[] {
-  switch (provider) {
-    case 'claude':
-      return ['--permission-mode', 'plan', '--disallowedTools=Bash,Edit,Write,NotebookEdit,ExitPlanMode']
-    case 'codex':
-      return ['--sandbox', 'read-only', '--ask-for-approval', 'never']
-    case 'antigravity':
-      return ['--mode', 'plan', '--sandbox']
-    default:
-      return []
-  }
 }
 
 /** Providers that get a startup banner, and the label it's shown under. */
@@ -266,7 +238,9 @@ export class PtyManager extends EventEmitter {
     const { opts, info } = session
     const { id, cwd } = info
     const { extraArgs: resumeArgs, claudeSessionId } = launchArgs(opts.provider, launch)
-    const extraArgs = opts.readOnly ? [...readOnlyArgs(opts.provider), ...resumeArgs] : resumeArgs
+    // Permission flags go BEFORE the launch args: `codex resume <id>` is a
+    // subcommand, and its global flags have to precede it.
+    const extraArgs = [...modeArgs(opts), ...resumeArgs]
     if (claudeSessionId) info.claudeSessionId = claudeSessionId
     session.launch = launch
 

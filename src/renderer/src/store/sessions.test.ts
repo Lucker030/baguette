@@ -27,6 +27,7 @@ function settings(overrides: Partial<AppSettings> = {}): AppSettings {
     closeToTray: true,
     notifyOnAttention: true,
     agentBridge: true,
+    autoApprove: {},
     terminalFontSize: 13,
     checkUpdatesOnLaunch: true,
     runtimePrefs: {},

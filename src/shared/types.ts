@@ -72,6 +72,12 @@ export interface CreateSessionOptions {
    */
   readOnly?: boolean
   /**
+   * Start the CLI with its "approve everything" switch (settings.autoApprove).
+   * Main-filled from settings, never taken from the renderer; ignored when
+   * readOnly is set.
+   */
+  autoApprove?: boolean
+  /**
    * Login flow only: scan early output for a Claude login URL and open it
    * directly via Electron's shell.openExternal instead of relying on the
    * CLI's own browser-launch, which is unreliable inside this app's pty.
@@ -156,7 +162,15 @@ export interface AppSettings {
   checkUpdatesOnLaunch: boolean
   /** Windows-vs-WSL choice per provider; missing = 'auto'. */
   runtimePrefs: Partial<Record<Provider, RuntimePref>>
+  /**
+   * Per provider: start its tabs with every permission request approved
+   * (see AUTO_APPROVE_PROVIDERS). Read-only agent-bridge tabs are never affected.
+   */
+  autoApprove: Partial<Record<Provider, boolean>>
 }
+
+/** Providers whose CLI has a switch to approve every permission request. */
+export const AUTO_APPROVE_PROVIDERS: Provider[] = ['antigravity']
 
 /** Outcome of asking GitHub Releases for a newer build — see main/updater.ts. */
 export interface UpdateCheckResult {

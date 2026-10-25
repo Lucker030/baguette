@@ -64,3 +64,25 @@ describe('accounts per provider', () => {
     expect(currentAccountFor('codex')).toBeNull()
   })
 })
+
+describe('autoApprove', () => {
+  it('keeps only booleans for providers that have the switch', async () => {
+    writeFileSync(
+      join(userData, 'settings.json'),
+      JSON.stringify({ autoApprove: { antigravity: true, claude: true, codex: 'yes' } })
+    )
+    const { getSettings } = await import('./settings')
+    expect(getSettings().autoApprove).toEqual({ antigravity: true })
+  })
+
+  it('defaults to off and merges updates', async () => {
+    const { getSettings, updateSettings } = await import('./settings')
+    expect(getSettings().autoApprove).toEqual({})
+    updateSettings({ autoApprove: { antigravity: true } })
+    expect(getSettings().autoApprove).toEqual({ antigravity: true })
+    updateSettings({ autoApprove: { claude: true } })
+    expect(getSettings().autoApprove).toEqual({ antigravity: true })
+    updateSettings({ autoApprove: { antigravity: false } })
+    expect(getSettings().autoApprove).toEqual({ antigravity: false })
+  })
+})

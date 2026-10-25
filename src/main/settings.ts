@@ -5,6 +5,7 @@ import os from 'node:os'
 import type { Account, AccountProvider, AppSettings, LaunchAtLoginState, SessionGroup } from '../shared/types'
 import {
   ACCOUNT_PROVIDERS,
+  AUTO_APPROVE_PROVIDERS,
   PROVIDERS,
   isAccountProvider,
   isRuntimePref,
@@ -59,7 +60,8 @@ function defaults(): AppSettings {
     agentBridge: true,
     terminalFontSize: TERMINAL_FONT_SIZE_DEFAULT,
     checkUpdatesOnLaunch: true,
-    runtimePrefs: {}
+    runtimePrefs: {},
+    autoApprove: {}
   }
 }
 
@@ -110,6 +112,17 @@ function normalizeRuntimePrefs(value: unknown): AppSettings['runtimePrefs'] {
   return out
 }
 
+/** `{ antigravity: true }` with providers that have no such switch, and non-booleans, dropped. */
+function normalizeAutoApprove(value: unknown): AppSettings['autoApprove'] {
+  const out: AppSettings['autoApprove'] = {}
+  if (!value || typeof value !== 'object') return out
+  for (const p of AUTO_APPROVE_PROVIDERS) {
+    const v = (value as Record<string, unknown>)[p]
+    if (typeof v === 'boolean') out[p] = v
+  }
+  return out
+}
+
 let cache: AppSettings | null = null
 
 function load(): AppSettings {
@@ -135,7 +148,8 @@ function load(): AppSettings {
       agentBridge: parsed.agentBridge ?? true,
       terminalFontSize: clampFontSize(parsed.terminalFontSize),
       runtimePrefs: normalizeRuntimePrefs(parsed.runtimePrefs),
-      checkUpdatesOnLaunch: parsed.checkUpdatesOnLaunch ?? true
+      checkUpdatesOnLaunch: parsed.checkUpdatesOnLaunch ?? true,
+      autoApprove: normalizeAutoApprove(parsed.autoApprove)
     }
   } catch {
     cache = defaults()
@@ -183,6 +197,9 @@ export function updateSettings(patch: Partial<AppSettings>): AppSettings {
   if (Array.isArray(patch?.accounts)) next.accounts = normalizeAccounts(patch.accounts)
   if (patch?.runtimePrefs && typeof patch.runtimePrefs === 'object') {
     next.runtimePrefs = normalizeRuntimePrefs(patch.runtimePrefs)
+  }
+  if (patch?.autoApprove && typeof patch.autoApprove === 'object') {
+    next.autoApprove = normalizeAutoApprove({ ...current.autoApprove, ...patch.autoApprove })
   }
   if (patch?.currentAccounts && typeof patch.currentAccounts === 'object') {
     next.currentAccounts = normalizeCurrentAccounts(patch.currentAccounts)

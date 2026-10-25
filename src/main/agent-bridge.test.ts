@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { dropInputBox, isCommandLine, parseRoute, pasteSequence, replyAfter, tidyLines } from './agent-bridge'
+import { KEYS, dropInputBox, isCommandLine, parseRoute, pasteSequence, replyAfter, tidyLines } from './agent-bridge'
+
+describe('KEYS', () => {
+  it('can pick any numbered option 1–9', () => {
+    for (let n = 1; n <= 9; n++) expect(KEYS[String(n)]).toBe(String(n))
+  })
+})
 
 describe('pasteSequence', () => {
   it('wraps text in bracketed-paste markers and submits separately', () => {

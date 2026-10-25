@@ -195,6 +195,7 @@ interface AppState {
   setCloseToTray: (enabled: boolean) => Promise<void>
   setNotifyOnAttention: (enabled: boolean) => Promise<void>
   setAgentBridge: (enabled: boolean) => Promise<void>
+  setAutoApprove: (provider: Provider, enabled: boolean) => Promise<void>
 
   // Updates
   setCheckUpdatesOnLaunch: (enabled: boolean) => Promise<void>
@@ -907,6 +908,11 @@ export const useApp = create<AppState>((set, get) => ({
 
   setAgentBridge: async (enabled) => {
     const settings = await window.api.updateSettings({ agentBridge: enabled })
+    set({ settings })
+  },
+
+  setAutoApprove: async (provider, enabled) => {
+    const settings = await window.api.updateSettings({ autoApprove: { [provider]: enabled } })
     set({ settings })
   },
 

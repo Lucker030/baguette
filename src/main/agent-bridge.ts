@@ -20,7 +20,7 @@ import { describeError, log } from './log'
 //
 // What a caller may touch is deliberately narrow:
 // - only tabs the bridge itself opened (never one the user opened by hand),
-// - and those start read-only by default (see readOnlyArgs in pty-manager.ts),
+// - and those start read-only by default (see readOnlyArgs in launch-mode.ts),
 //   so the watched agent can answer but not edit files or run commands.
 
 /** The slice of PtyManager the bridge needs, structural so tests can fake it. */
@@ -80,7 +80,13 @@ export const KEYS: Record<string, string> = {
   n: 'n',
   '1': '1',
   '2': '2',
-  '3': '3'
+  '3': '3',
+  '4': '4',
+  '5': '5',
+  '6': '6',
+  '7': '7',
+  '8': '8',
+  '9': '9'
 }
 
 export function pasteSequence(text: string): { paste: string; submit: string } {
