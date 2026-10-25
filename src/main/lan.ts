@@ -3,7 +3,8 @@ import { connect, createServer, type Server, type Socket } from 'node:net'
 import { createSocket, type Socket as UdpSocket } from 'node:dgram'
 import os from 'node:os'
 import { randomBytes } from 'node:crypto'
-import type { LanDevice, LanStatus } from '../shared/types'
+import type { LanDevice, LanStatus, SyncCategory } from '../shared/types'
+import { SYNC_CATEGORIES } from '../shared/types'
 import type { BridgeCall, BridgeKind, Caller } from './agent-bridge'
 import {
   FrameCipher,
@@ -65,6 +66,10 @@ export interface StoredPeer {
   /** This PC lets the peer open writable tabs here. */
   allowWrite: boolean
   pairedAt: number
+  /** What this PC ticked for syncing with the peer (lan-sync.ts). */
+  sync?: Partial<Record<SyncCategory, boolean>>
+  /** What the peer last told us it ticked for this PC. */
+  peerSync?: Partial<Record<SyncCategory, boolean>>
 }
 
 export interface LanState {
@@ -83,6 +88,8 @@ export interface LanDeps {
   version: string
   /** Run a bridge call for a paired device (AgentBridge.exec). */
   exec(call: BridgeCall, caller: Caller): Promise<unknown>
+  /** `sync.*` calls from a paired device (LanSync.serve). */
+  syncServe?: (peerId: string, method: string, params: unknown) => Promise<unknown>
   log: { info(msg: string): void; warn(msg: string): void }
   /** Tests: 0 for any free port. */
   port?: number
@@ -465,7 +472,10 @@ export class LanNode extends EventEmitter {
         paired: true,
         online: Boolean(fresh || connected),
         allowWrite: p.allowWrite,
-        version: s?.version
+        version: s?.version,
+        sync: Object.fromEntries(
+          SYNC_CATEGORIES.map((c) => [c, { mine: p.sync?.[c] === true, theirs: p.peerSync?.[c] === true }])
+        ) as LanDevice['sync']
       })
     }
     for (const s of this.seen.values()) {
@@ -583,12 +593,45 @@ export class LanNode extends EventEmitter {
   }
 
   /** Run a bridge call on a paired device. */
-  async call(deviceId: string, call: BridgeCall): Promise<unknown> {
+  call(deviceId: string, call: BridgeCall): Promise<unknown> {
+    return this.request(deviceId, 'bridge', call)
+  }
+
+  /** Any call to a paired device (bridge, sync.*), by id or name. */
+  async request(deviceId: string, method: string, params: unknown): Promise<unknown> {
     if (!this.running) throw new LanError(409, '內網連線沒有開啟（內網裝置 → 啟用）')
     const peer = this.peer(deviceId) ?? this.state.peers.find((p) => p.name.toLowerCase() === deviceId.toLowerCase())
     if (!peer) throw new LanError(404, `沒有配對過的裝置：${deviceId}`)
     const s = await this.session(peer)
-    return s.request('bridge', call)
+    return s.request(method, params)
+  }
+
+  /** Paired peers with their sync ticks, for LanSync. */
+  syncPeers(): {
+    id: string
+    name: string
+    online: boolean
+    mine: Partial<Record<SyncCategory, boolean>>
+    theirs: Partial<Record<SyncCategory, boolean>>
+  }[] {
+    const online = new Map(this.devices().map((d) => [d.id, d.online]))
+    return this.state.peers.map((p) => ({ id: p.id, name: p.name, online: online.get(p.id) === true, mine: { ...p.sync }, theirs: { ...p.peerSync } }))
+  }
+
+  setSyncFlag(id: string, cat: SyncCategory, on: boolean): void {
+    const peer = this.peer(id)
+    if (!peer) return
+    peer.sync = { ...peer.sync, [cat]: on }
+    this.persist()
+    this.emit('changed')
+  }
+
+  setPeerSync(id: string, flags: Partial<Record<SyncCategory, boolean>>): void {
+    const peer = this.peer(id)
+    if (!peer) return
+    peer.peerSync = { ...flags }
+    this.persist()
+    this.emit('changed')
   }
 
   // ---- internals ----
@@ -808,6 +851,7 @@ export class LanNode extends EventEmitter {
       }
       return this.deps.exec(call, { owner: peerId, allowWrite: peer.allowWrite, label: peer.name })
     }
+    if (method.startsWith('sync.') && this.deps.syncServe) return this.deps.syncServe(peerId, method, params)
     throw new LanError(404, `unknown method ${method}`)
   }
 

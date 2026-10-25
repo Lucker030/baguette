@@ -163,6 +163,28 @@ export function updateKnowledge(id: string, patch: KnowledgeFields): KnowledgeEn
   return listKnowledge()
 }
 
+/** LAN sync (lan-sync-adapters.ts): every entry as stored, read fresh from disk. */
+export function knowledgeItems(): KnowledgeEntry[] {
+  cache = null
+  return load().items
+}
+
+/**
+ * LAN sync: write and delete whole entries by id in one save. Entries come
+ * from another PC, so each goes through normalize() like a hand-written one;
+ * the id is kept as given (it is the sync key).
+ */
+export function applyKnowledgeChanges(put: unknown[], remove: string[]): void {
+  const store = load()
+  const byId = new Map(store.items.map((k) => [k.id, k]))
+  for (const id of remove) byId.delete(id)
+  put.forEach((raw, i) => {
+    const entry = normalize(raw, i)
+    if (entry && typeof (raw as { id?: unknown }).id === 'string') byId.set(entry.id, entry)
+  })
+  persist({ ...store, items: [...byId.values()] })
+}
+
 export function removeKnowledge(id: string): KnowledgeEntry[] {
   const store = load()
   persist({ ...store, items: store.items.filter((k) => k.id !== id) })

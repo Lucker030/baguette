@@ -463,7 +463,9 @@ export class AgentBridge {
     const id = await this.deps.openTab({
       provider,
       // A remote caller's tabs say whose they are, for whoever sits at this PC.
-      name: caller.label ? `🤖 ${caller.label.slice(0, 20)}／${name}` : `🤖 ${name}`,
+      // (They are told apart from the user's own tabs by their sidebar group,
+      // AI_GROUP_NAME in the renderer's store.)
+      name: caller.label ? `${caller.label.slice(0, 20)}／${name}` : name,
       cwd: typeof body.cwd === 'string' && body.cwd ? body.cwd : undefined,
       accountId: typeof body.accountId === 'string' ? body.accountId : undefined,
       readOnly,

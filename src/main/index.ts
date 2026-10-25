@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain, shell, dialog, clipboard, Notification, nativeImage } from 'electron'
 import type { Tray } from 'electron'
-import { writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import os from 'node:os'
 import { join } from 'node:path'
@@ -9,7 +9,7 @@ import { AgentBridge } from './agent-bridge'
 import type { BridgeCall, OpenTabRequest } from './agent-bridge'
 import { listProviders, setRuntimePrefs, warmProviderCache } from './providers'
 import { listSkills, createSkill } from './skills'
-import { listHooks, createHook, updateHook, removeHook, setHookEnabled } from './hooks'
+import { listHooks, createHook, updateHook, removeHook, setHookEnabled, applyHookChanges } from './hooks'
 import { getSnapshot, saveSnapshot } from './session-store'
 import { sendToRenderer } from './renderer-bridge'
 import { initLog, log, logDir, logFile } from './log'
@@ -17,8 +17,13 @@ import { appIconPath, createTray } from './tray'
 import { checkForUpdate, installUpdate, RELEASES_PAGE } from './updater'
 import { LanNode } from './lan'
 import { lanStore } from './lan-store'
+import { LanSync, type Hashes } from './lan-sync'
+import { backupFile, recordAdapter, skillsAdapter } from './lan-sync-adapters'
+import { writeFileAtomic } from './atomic-write'
 import {
   addKnowledge,
+  applyKnowledgeChanges,
+  knowledgeItems,
   knowledgePath,
   listKnowledge,
   removeKnowledge,
@@ -38,7 +43,7 @@ import {
   resolveAccountDir,
   currentAccountFor
 } from './settings'
-import { isAccountProvider, PROVIDERS } from '../shared/types'
+import { isAccountProvider, PROVIDERS, SYNC_CATEGORIES } from '../shared/types'
 import type {
   AppPaths,
   AppSettings,
@@ -48,6 +53,7 @@ import type {
   Provider,
   SessionLaunch,
   SessionSnapshot,
+  SyncCategory,
   UpdateCheckResult
 } from '../shared/types'
 
@@ -125,8 +131,74 @@ function lanDeviceName(): string {
   return getSettings().lanDeviceName || os.hostname()
 }
 
+function lanState(node: LanNode): { status: ReturnType<LanNode['status']>; devices: ReturnType<LanNode['devices']> } {
+  return {
+    status: node.status(),
+    devices: node.devices().map((d) => (d.paired ? { ...d, syncProgress: lanSync?.progressOf(d.id) } : d))
+  }
+}
+
 function sendLanState(): void {
-  if (lanNode) sendToRenderer(mainWindow, 'lan:changed', { status: lanNode.status(), devices: lanNode.devices() })
+  if (lanNode) sendToRenderer(mainWindow, 'lan:changed', lanState(lanNode))
+}
+
+// ---- LAN sync of 知識庫 / Skills / Hook 庫 (lan-sync.ts) ------------------------
+let lanSync: LanSync | null = null
+
+/** Per peer and category, the hashes both sides agreed on (lan-sync.ts "base"). */
+function syncBases(): { get(peer: string, cat: SyncCategory): Hashes | null; set(peer: string, cat: SyncCategory, base: Hashes): void } {
+  const file = join(app.getPath('userData'), 'lan-sync.json')
+  const read = (): Record<string, Hashes> => {
+    try {
+      return JSON.parse(readFileSync(file, 'utf8')) as Record<string, Hashes>
+    } catch {
+      return {}
+    }
+  }
+  return {
+    get: (peer, cat) => read()[`${peer}/${cat}`] ?? null,
+    set: (peer, cat, base) => writeFileAtomic(file, JSON.stringify({ ...read(), [`${peer}/${cat}`]: base }))
+  }
+}
+
+function createLanSync(node: LanNode): LanSync {
+  const backups = join(app.getPath('userData'), 'sync-backup')
+  const claudeDir = join(os.homedir(), '.claude')
+  const sync = new LanSync({
+    myId: () => node.deviceId,
+    peers: () => node.syncPeers(),
+    setMine: (id, cat, on) => node.setSyncFlag(id, cat, on),
+    setTheirs: (id, flags) => node.setPeerSync(id, flags),
+    request: (id, method, params) => node.request(id, method, params),
+    adapters: {
+      knowledge: recordAdapter<KnowledgeEntry>({
+        items: knowledgeItems,
+        fingerprint: (k) => k,
+        write: applyKnowledgeChanges,
+        asCopy: (k, id, from) => ({ ...k, id, title: `${k.title}（來自 ${from}）` }),
+        backup: () => backupFile(knowledgePath(), backups)
+      }),
+      hooks: recordAdapter<HookDef>({
+        items: listHooks,
+        // Enabled is this PC's own choice: hooks arrive disabled.
+        fingerprint: (h) => ({ id: h.id, name: h.name, event: h.event, matcher: h.matcher, command: h.command, schedule: h.schedule }),
+        write: (put, remove) => void applyHookChanges(put, remove),
+        asCopy: (h, id, from) => ({ ...h, id, name: `${h.name}（來自 ${from}）` }),
+        backup: () => backupFile(join(app.getPath('userData'), 'hooks.json'), backups)
+      }),
+      skills: skillsAdapter(join(claudeDir, 'skills'), join(claudeDir, '.baguette-sync'), (name, reason) =>
+        log.warn(`sync: skill ${name} skipped: ${reason}`)
+      )
+    },
+    bases: syncBases(),
+    log: { info: (m) => log.info(m), warn: (m) => log.warn(m) }
+  })
+  sync.on('changed', sendLanState)
+  // The knowledge panel ignores the file watcher for our own writes; tell it.
+  sync.on('applied', (cat: SyncCategory) => {
+    if (cat === 'knowledge') sendToRenderer(mainWindow, 'knowledge:changed', listKnowledge())
+  })
+  return sync
 }
 
 /** Start or stop LAN control to match settings.lanEnabled. */
@@ -142,15 +214,22 @@ function syncLan(): void {
         if (!agentBridge) throw new Error('agent bridge unavailable')
         return agentBridge.exec(call, caller)
       },
-      log: { info: (m) => log.info(m), warn: (m) => log.warn(m) }
+      log: { info: (m) => log.info(m), warn: (m) => log.warn(m) },
+      syncServe: (peer, method, params) => {
+        if (!lanSync) throw new Error('sync unavailable')
+        return lanSync.serve(peer, method, params)
+      }
     })
     lanNode.on('changed', sendLanState)
     lanNode.on('paired', (d: { name: string }) => sendToRenderer(mainWindow, 'lan:paired', d))
+    lanSync = createLanSync(lanNode)
   }
   if (getSettings().lanEnabled) {
     lanNode.start().catch((e) => log.error(`lan failed to start: ${(e as Error).message}`))
+    lanSync?.start()
   } else {
     lanNode.stop()
+    lanSync?.stop()
   }
 }
 
@@ -457,7 +536,13 @@ function registerIpc(): void {
     if (!lanNode) throw new Error('內網連線尚未初始化')
     return lanNode
   }
-  ipcMain.handle('lan:state', () => ({ status: lan().status(), devices: lan().devices() }))
+  ipcMain.handle('lan:state', () => lanState(lan()))
+  ipcMain.handle('lan:setSync', (_e, id: unknown, cat: unknown, on: unknown) => {
+    const c = SYNC_CATEGORIES.find((x) => x === cat)
+    if (!c || !lanSync) throw new Error('不允許的操作')
+    return lanSync.setEnabled(String(id ?? ''), c, on === true)
+  })
+  ipcMain.handle('lan:syncNow', (_e, id: unknown) => lanSync?.syncPeer(String(id ?? '')))
   ipcMain.handle('lan:startPairing', () => lan().startPairing())
   ipcMain.handle('lan:cancelPairing', () => lan().cancelPairing())
   ipcMain.handle('lan:pair', (_e, target: unknown, code: unknown) => {

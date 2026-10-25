@@ -5,6 +5,8 @@ import { randomUUID } from 'node:crypto'
 import { writeFileAtomic } from './atomic-write'
 import { log } from './log'
 import type { LanState, LanStore, StoredPeer } from './lan'
+import type { SyncCategory } from '../shared/types'
+import { SYNC_CATEGORIES } from '../shared/types'
 
 // This PC's LAN identity and its paired devices, in userData/lan.json.
 // Pairing secrets are encrypted by the OS (safeStorage: DPAPI on Windows,
@@ -51,8 +53,17 @@ function readPeer(v: unknown): StoredPeer | null {
     address: typeof p.address === 'string' ? p.address : undefined,
     port: typeof p.port === 'number' ? p.port : undefined,
     allowWrite: p.allowWrite === true,
-    pairedAt: typeof p.pairedAt === 'number' ? p.pairedAt : 0
+    pairedAt: typeof p.pairedAt === 'number' ? p.pairedAt : 0,
+    sync: readFlags(p.sync),
+    peerSync: readFlags(p.peerSync)
   }
+}
+
+function readFlags(v: unknown): Partial<Record<SyncCategory, boolean>> {
+  const out: Partial<Record<SyncCategory, boolean>> = {}
+  if (!v || typeof v !== 'object') return out
+  for (const c of SYNC_CATEGORIES) if (typeof (v as Record<string, unknown>)[c] === 'boolean') out[c] = (v as Record<string, boolean>)[c]
+  return out
 }
 
 function save(state: LanState): void {

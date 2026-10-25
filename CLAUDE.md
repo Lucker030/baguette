@@ -93,6 +93,16 @@ noise.
   AES-256-GCM frames with counter nonces. TCP 47610 (falls back to a random
   port, announced over discovery), UDP broadcast 47611. Off by default
   (`lanEnabled`). Secrets in `userData/lan.json` via safeStorage (DPAPI).
+- LAN sync of 知識庫 / Skills / Hook 庫 (`lan-sync.ts`, `lan-sync-adapters.ts`),
+  designed with a Codex review: a category syncs only while BOTH PCs ticked
+  it (checked by the receiver on every call); the smaller device id plans a
+  three-way merge against its stored base (`userData/lan-sync.json`); both-
+  changed keeps both versions (copy key), never a timestamp winner; deletes
+  only propagate over an untouched copy, and never on a first sync; hooks
+  arrive disabled; skills are validated and swapped as whole folders with
+  backups in `~/.claude/.baguette-sync`. One peer per category.
+- Agent-bridge tabs go in the sidebar group 「AI 討論區」 (`AI_GROUP_NAME` in
+  the store), not a 🤖 name prefix — the user asked for that.
 - The MCP server (`src/main/mcp.ts` → `out/main/mcp.js`, asarUnpack'd) is a
   standalone script an AI CLI runs as `ELECTRON_RUN_AS_NODE=1 baguette.exe
   mcp.js <agent-bridge.json>`; it only calls the local bridge, which relays

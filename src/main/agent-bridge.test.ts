@@ -56,7 +56,7 @@ describe('AgentBridge.exec callers', () => {
     })
     expect(opened).toEqual([])
     await bridge.exec({ kind: 'open', body: { provider: 'claude', name: 'x' } }, remote)
-    expect(opened[0]).toMatchObject({ name: '🤖 PC-A／x', readOnly: true })
+    expect(opened[0]).toMatchObject({ name: 'PC-A／x', readOnly: true })
     await bridge.exec({ kind: 'open', body: { provider: 'claude', readOnly: false } }, { ...remote, allowWrite: true })
     expect(opened[1].readOnly).toBe(false)
   }, 10_000)

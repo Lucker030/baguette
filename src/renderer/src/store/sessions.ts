@@ -245,6 +245,35 @@ function placeInFocusedPane(
   return { panes: next, focusedPane: target }
 }
 
+/** The sidebar group every agent-bridge tab goes into. */
+export const AI_GROUP_NAME = 'AI 討論區'
+
+let aiGroupPending: Promise<string> | null = null
+
+/**
+ * The AI group's id, creating the group if it doesn't exist. Found by name,
+ * so a group the user renamed away stops being used and a new one appears.
+ * Bridge requests can arrive together (an `ac party`); the pending promise
+ * keeps them from each creating a group.
+ */
+function aiGroupId(
+  get: () => AppState,
+  set: (partial: Partial<AppState>) => void
+): Promise<string> {
+  const existing = (get().settings?.groups ?? []).find((g) => g.name === AI_GROUP_NAME)
+  if (existing) return Promise.resolve(existing.id)
+  aiGroupPending ??= (async () => {
+    const id = `g${Date.now().toString(36)}`
+    const groups: SessionGroup[] = [...(get().settings?.groups ?? []), { id, name: AI_GROUP_NAME, accountId: 'default' }]
+    // Unlike addGroup, the user's selected group stays as it is.
+    set({ settings: await window.api.updateSettings({ groups }) })
+    return id
+  })().finally(() => {
+    aiGroupPending = null
+  })
+  return aiGroupPending
+}
+
 export const useApp = create<AppState>((set, get) => ({
   sessions: [],
   activeId: null,
@@ -327,16 +356,21 @@ export const useApp = create<AppState>((set, get) => ({
     // Agent bridge: main asks for a tab and waits for the id; open it through
     // the same createSession every button uses so it is a normal tab in
     // every respect (sidebar, group, panes, snapshot).
+    // Those tabs all go in one group, AI_GROUP_NAME, created on first use, so
+    // they stay apart from the user's own tabs.
     window.api.onBridgeOpenTab?.((req) => {
-      get()
-        .createSession(req.provider, {
-          launch: { kind: 'new' },
-          cwd: req.cwd,
-          accountId: req.accountId,
-          name: req.name,
-          readOnly: req.readOnly,
-          focus: req.focus
-        })
+      aiGroupId(get, set)
+        .then((groupId) =>
+          get().createSession(req.provider, {
+            launch: { kind: 'new' },
+            cwd: req.cwd,
+            accountId: req.accountId,
+            name: req.name,
+            readOnly: req.readOnly,
+            focus: req.focus,
+            groupId
+          })
+        )
         .then((info) => window.api.bridgeOpenTabResult({ reqId: req.reqId, id: info.id }))
         .catch((e: unknown) =>
           window.api.bridgeOpenTabResult({ reqId: req.reqId, error: (e as Error)?.message ?? String(e) })

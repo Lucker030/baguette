@@ -187,6 +187,22 @@ export interface LanDevice {
   /** Paired only: this PC lets it open writable tabs here. */
   allowWrite?: boolean
   version?: string
+  /** Paired only: what each side ticked for syncing (main/lan-sync.ts). */
+  sync?: Record<SyncCategory, { mine: boolean; theirs: boolean }>
+  /** Paired only: the latest sync run's progress. */
+  syncProgress?: LanSyncProgress
+}
+
+export type SyncCategory = 'knowledge' | 'skills' | 'hooks'
+export const SYNC_CATEGORIES: SyncCategory[] = ['knowledge', 'skills', 'hooks']
+
+export interface LanSyncProgress {
+  category: SyncCategory
+  phase: 'scan' | 'transfer' | 'done' | 'error'
+  done: number
+  total: number
+  error?: string
+  at: number
 }
 
 export interface LanStatus {

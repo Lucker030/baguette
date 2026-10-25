@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import type { LanDevice, LanRemoteTab, LanState, McpInfo } from '@shared/types'
+import type { LanDevice, LanRemoteTab, LanState, McpInfo, SyncCategory } from '@shared/types'
+import { SYNC_CATEGORIES } from '@shared/types'
 import { useApp } from '../store/sessions'
 import { PROVIDER_UI } from '../providerUi'
 import { LibraryHeader } from './LibraryHeader'
@@ -50,50 +51,38 @@ function ThisDevice({ lan }: { lan: LanState }): JSX.Element {
   const left = pairing ? Math.max(0, Math.ceil((pairing.expiresAt - now) / 1000)) : 0
 
   return (
-    <Section
-      title="這台電腦"
-      hint={
-        status.running
-          ? `其他電腦會看到「${status.deviceName}」。位址 ${status.addresses.join('、') || '（沒有網路）'}，連接埠 ${status.port}。`
-          : undefined
-      }
-    >
+    <Section title="這台電腦">
       <div className="flex items-center gap-2">
-        <span className="w-16 shrink-0 text-xs text-txt-dim">名稱</span>
         <input
           value={name}
           onChange={(e) => setName(e.target.value)}
           onBlur={() => name !== (settings?.lanDeviceName ?? '') && void setLanDeviceName(name)}
           onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
           placeholder={status.deviceName}
+          title="其他電腦看到的名稱"
           maxLength={40}
-          className={`${INPUT} w-64`}
+          className={`${INPUT} w-56`}
         />
-      </div>
-      <div className="rounded-lg border border-line bg-bg-panel p-4">
+        <span className="truncate text-[11px] text-txt-dim" title={status.addresses.join('、')}>
+          {status.addresses[0] ?? ''}
+        </span>
         {pairing ? (
-          <div className="flex items-center gap-4">
-            <div>
-              <div className="font-mono text-3xl tracking-[0.3em] text-txt-base">{pairing.code}</div>
-              <div className="mt-1 text-xs text-txt-dim">
-                在另一台電腦的「附近的裝置」選這台，輸入這組碼。{left} 秒後失效。
-              </div>
-            </div>
-            <button onClick={() => void window.api.cancelLanPairing()} className={`${BTN} ml-auto`}>
+          <div className="ml-auto flex items-center gap-2" title="在另一台的「附近的裝置」輸入這組碼">
+            <span className="font-mono text-xl tracking-[0.25em] text-txt-base">{pairing.code}</span>
+            <span className="w-8 text-[11px] text-txt-dim">{left}s</span>
+            <button onClick={() => void window.api.cancelLanPairing()} className={BTN}>
               取消
             </button>
           </div>
         ) : (
-          <div className="flex items-center gap-3">
-            <span className="text-xs text-txt-dim">要讓另一台電腦控制這台？先在這裡顯示配對碼。</span>
-            <button
-              onClick={() => void window.api.startLanPairing()}
-              disabled={!status.running}
-              className={`${BTN_PRIMARY} ml-auto`}
-            >
-              顯示配對碼
-            </button>
-          </div>
+          <button
+            onClick={() => void window.api.startLanPairing()}
+            disabled={!status.running}
+            title="讓另一台電腦和這台配對"
+            className={`${BTN_PRIMARY} ml-auto`}
+          >
+            顯示配對碼
+          </button>
         )}
       </div>
     </Section>
@@ -152,9 +141,7 @@ function RemoteTabs({ device }: { device: LanDevice }): JSX.Element {
 
   if (error) return <div className="text-xs text-red-400">{error}</div>
   if (!tabs) return <div className="text-xs text-txt-dim">載入中…</div>
-  if (!tabs.length) {
-    return <div className="text-xs text-txt-dim">這台電腦的 AI 還沒有在 {device.name} 上開分頁（透過 MCP 的 baguette_open_tab）。</div>
-  }
+  if (!tabs.length) return <div className="text-xs text-txt-dim">沒有 AI 分頁</div>
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap gap-1.5">
@@ -189,6 +176,55 @@ function RemoteTabs({ device }: { device: LanDevice }): JSX.Element {
   )
 }
 
+const SYNC_LABELS: Record<SyncCategory, string> = { knowledge: '知識庫', skills: 'Skills', hooks: 'Hook' }
+
+function SyncRow({ device }: { device: LanDevice }): JSX.Element {
+  const [error, setError] = useState('')
+  const pr = device.syncProgress
+  const active = pr && (pr.phase === 'scan' || pr.phase === 'transfer')
+  const pct = pr && pr.total > 0 ? Math.round((pr.done / pr.total) * 100) : pr?.phase === 'done' ? 100 : 0
+  return (
+    <div className="space-y-1.5 border-t border-line px-3 py-2">
+      <div className="flex flex-wrap items-center gap-3 text-xs text-txt-dim">
+        <span>同步</span>
+        {SYNC_CATEGORIES.map((c) => {
+          const s = device.sync?.[c]
+          return (
+            <label key={c} className="flex cursor-pointer items-center gap-1" title="兩台都勾才會同步；從別台來的 hook 預設停用">
+              <input
+                type="checkbox"
+                checked={s?.mine === true}
+                onChange={(e) => {
+                  setError('')
+                  window.api.setLanSync(device.id, c, e.target.checked).catch((err: unknown) => setError(errorText(err)))
+                }}
+                className="h-3.5 w-3.5 accent-copilot"
+              />
+              {SYNC_LABELS[c]}
+              {s?.mine && !s.theirs && <span className="text-[10px] text-amber-300">等對方</span>}
+            </label>
+          )
+        })}
+      </div>
+      {pr && (
+        <div className="flex items-center gap-2 text-[11px] text-txt-dim">
+          <div className="h-1.5 flex-1 overflow-hidden rounded bg-bg-base">
+            <div
+              className={`h-full transition-all ${pr.phase === 'error' ? 'bg-red-500' : 'bg-copilot'} ${active && pr.total === 0 ? 'animate-pulse' : ''}`}
+              style={{ width: `${active && pr.total === 0 ? 100 : pct}%` }}
+            />
+          </div>
+          <span className="shrink-0">
+            {SYNC_LABELS[pr.category]}{' '}
+            {pr.phase === 'scan' ? '比對中' : pr.phase === 'error' ? '失敗' : `${pr.done}/${pr.total}`}
+          </span>
+        </div>
+      )}
+      {(error || pr?.error) && <div className="text-[11px] text-red-400">{error || pr?.error}</div>}
+    </div>
+  )
+}
+
 function PairedDevice({ device }: { device: LanDevice }): JSX.Element {
   const [open, setOpen] = useState(false)
   return (
@@ -213,7 +249,7 @@ function PairedDevice({ device }: { device: LanDevice }): JSX.Element {
             onChange={(e) => void window.api.setLanAllowWrite(device.id, e.target.checked)}
             className="h-3.5 w-3.5 accent-copilot"
           />
-          允許開可寫入的分頁
+          可寫入
         </label>
         <button
           onClick={() => {
@@ -224,9 +260,10 @@ function PairedDevice({ device }: { device: LanDevice }): JSX.Element {
           解除配對
         </button>
       </div>
+      <SyncRow device={device} />
       {open && (
         <div className="border-t border-line px-3 py-3">
-          {device.online ? <RemoteTabs device={device} /> : <div className="text-xs text-txt-dim">離線中。</div>}
+          {device.online ? <RemoteTabs device={device} /> : <div className="text-xs text-txt-dim">離線</div>}
         </div>
       )}
     </li>
@@ -317,8 +354,9 @@ function AddByAddress(): JSX.Element {
           value={address}
           onChange={(e) => setAddress(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && address.trim() && void find()}
-          placeholder="或輸入對方 IP，例如 192.168.0.124"
-          className={`${INPUT} w-72`}
+          placeholder="IP，例如 192.168.0.124"
+          title="找不到對方時，直接輸入它的 IP"
+          className={`${INPUT} w-56`}
         />
         <button onClick={() => void find()} disabled={busy || !address.trim()} className={BTN}>
           {busy ? '尋找中…' : '尋找'}
@@ -349,16 +387,17 @@ function McpSection(): JSX.Element {
     { cli: 'Antigravity', cmd: `agy mcp add --env ELECTRON_RUN_AS_NODE=1 baguette ${args}` }
   ]
   return (
-    <Section
-      title="給 AI 用（MCP）"
-      hint="把 baguette 加成 AI CLI 的 MCP server，AI 就能用 baguette_devices、baguette_open_tab、baguette_send 等工具，在這台或已配對的電腦上開分頁、對話。在要用的那台電腦上執行一次即可。"
-    >
+    <details className="group">
+      <summary
+        className="cursor-pointer text-sm font-medium"
+        title="在 AI CLI 執行一次，AI 就能在這台或配對的電腦開分頁、對話"
+      >
+        MCP 指令
+      </summary>
       {!info.bridgeOn && (
-        <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
-          MCP 透過本機的 agent bridge 運作，請先到 設定 打開「agent bridge」。
-        </div>
+        <div className="mt-2 text-xs text-amber-300">需要先在 設定 打開「允許 AI 開分頁跟其他 AI 對話」</div>
       )}
-      <ul className="space-y-2">
+      <ul className="mt-2 space-y-2">
         {commands.map(({ cli, cmd }) => (
           <li key={cli} className="space-y-1">
             <div className="flex items-center gap-2 text-xs">
@@ -379,7 +418,7 @@ function McpSection(): JSX.Element {
           </li>
         ))}
       </ul>
-    </Section>
+    </details>
   )
 }
 
@@ -421,11 +460,11 @@ export function DevicesPanel(): JSX.Element {
       <div className="min-h-0 flex-1 overflow-y-auto p-5">
         <div className="max-w-2xl space-y-7">
           {!enabled && (
-            <div className="rounded-lg border border-dashed border-line px-4 py-5 text-xs leading-relaxed text-txt-dim">
-              打開右上角的「內網連線」，同一個網路裡的 baguette 就會互相看到。配對之後，一台電腦上的 AI
-              可以在另一台開 AI 分頁、傳訊息、讀回覆（預設唯讀），你在這裡看得到它在做什麼。連線全程加密，只有配對過的電腦能連。
-              <br />
-              第一次打開時 Windows 可能會問要不要讓 baguette 使用網路，請允許「私人網路」。
+            <div
+              className="text-xs text-txt-dim"
+              title="配對後，AI 可以在另一台開分頁、對話（預設唯讀），連線加密。Windows 詢問網路權限時請允許「私人網路」。"
+            >
+              打開右上角「內網連線」，和同網路的電腦配對。
             </div>
           )}
           {lan?.status.error && (
@@ -436,27 +475,23 @@ export function DevicesPanel(): JSX.Element {
             <>
               <ThisDevice lan={lan} />
 
-              <Section title="已配對" hint={paired.length ? '點一下展開，可以看這台電腦的 AI 在對方開的分頁。' : undefined}>
-                {paired.length ? (
+              {paired.length > 0 && (
+                <Section title="已配對">
                   <ul className="space-y-2">
                     {paired.map((d) => (
                       <PairedDevice key={d.id} device={d} />
                     ))}
                   </ul>
-                ) : (
-                  <div className="text-xs text-txt-dim">還沒有配對的電腦。</div>
-                )}
-              </Section>
+                </Section>
+              )}
 
-              <Section title="附近的裝置" hint="同一個網路裡開著內網連線的 baguette。">
-                {nearby.length ? (
+              <Section title="附近的裝置">
+                {nearby.length > 0 && (
                   <ul className="space-y-2">
                     {nearby.map((d) => (
                       <NearbyDevice key={d.id} device={d} />
                     ))}
                   </ul>
-                ) : (
-                  <div className="text-xs text-txt-dim">還沒找到。對方也要打開內網連線；找不到的話用 IP 試試。</div>
                 )}
                 <AddByAddress />
               </Section>

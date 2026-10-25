@@ -201,7 +201,7 @@ describe('persistSnapshot', () => {
     await loadStore()
     const s = store.getState()
     await s.createSession('claude', { name: 'mine' })
-    await s.createSession('antigravity', { name: '🤖 helper', readOnly: true })
+    await s.createSession('antigravity', { name: 'helper', readOnly: true })
 
     // Restored, the bridge tab would come back writable and uncontrolled.
     const last = savedSnapshots[savedSnapshots.length - 1]

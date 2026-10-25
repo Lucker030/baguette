@@ -366,4 +366,33 @@ export function setHookEnabled(id: string, enabled: boolean): HookDef[] {
   return updateHook(id, { enabled })
 }
 
+const SYNC_ID_RE = /^[\w~-]{1,80}$/
+
+/**
+ * LAN sync (lan-sync-adapters.ts): write and delete hooks by id in one
+ * reconcile. A hook from another PC is a command that would run here, so
+ * every one that arrives — new or changed — comes in disabled; the user turns
+ * it on. Fields go through the same validation as the renderer's.
+ */
+export function applyHookChanges(put: unknown[], remove: string[]): HookDef[] {
+  const s = load()
+  const byId = new Map(s.hooks.map((h) => [h.id, h]))
+  for (const id of remove) byId.delete(id)
+  for (const raw of put) {
+    const id = (raw as { id?: unknown })?.id
+    const fields = sanitizeHookPatch(raw)
+    if (typeof id !== 'string' || !SYNC_ID_RE.test(id) || !fields.event) continue
+    byId.set(id, {
+      id,
+      name: (fields.name ?? '').trim() || '未命名 hook',
+      event: fields.event,
+      matcher: fields.matcher ?? '',
+      command: fields.command ?? '',
+      enabled: false,
+      schedule: fields.schedule
+    })
+  }
+  return reconcile({ ...s, hooks: [...byId.values()] }).hooks
+}
+
 export type { HookEvent }

@@ -53,7 +53,7 @@ function mount(enabled: boolean, state = lanState()): void {
 describe('DevicesPanel', () => {
   it('explains the feature and offers no pairing while LAN control is off', async () => {
     mount(false, lanState({ running: false }))
-    expect(await screen.findByText(/打開右上角的「內網連線」/)).toBeTruthy()
+    expect(await screen.findByText(/打開右上角「內網連線」/)).toBeTruthy()
     expect(screen.queryByText('顯示配對碼')).toBeNull()
   })
 

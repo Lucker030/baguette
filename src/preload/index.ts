@@ -21,6 +21,7 @@ import type {
   LanRemoteTab,
   LanState,
   McpInfo,
+  SyncCategory,
   UpdateCheckResult
 } from '../shared/types'
 
@@ -115,6 +116,10 @@ const api = {
   closeLanTab: (deviceId: string, tabId: string): Promise<void> =>
     ipcRenderer.invoke('lan:call', deviceId, { kind: 'close', id: tabId }),
   getMcpInfo: (): Promise<McpInfo> => ipcRenderer.invoke('lan:mcpInfo'),
+  /** Tick / untick syncing a category with a paired PC (main/lan-sync.ts). */
+  setLanSync: (deviceId: string, category: SyncCategory, on: boolean): Promise<void> =>
+    ipcRenderer.invoke('lan:setSync', deviceId, category, on),
+  syncLanNow: (deviceId: string): Promise<void> => ipcRenderer.invoke('lan:syncNow', deviceId),
   onLanChanged: (cb: (s: LanState) => void): Unsubscribe => subscribe('lan:changed', cb),
   /** Pairing finished (on either side). */
   onLanPaired: (cb: (d: { id: string; name: string }) => void): Unsubscribe => subscribe('lan:paired', cb),

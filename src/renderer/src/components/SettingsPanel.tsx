@@ -189,13 +189,13 @@ export function SettingsPanel(): JSX.Element {
             />
             <Toggle
               label="允許 AI 開分頁跟其他 AI 對話"
-              hint="開一個本機介面（只限這台電腦、需要 token），讓 AI 開出唯讀的 🤖 分頁並在裡面打字，你可以在旁邊看。只能操作它自己開的分頁。"
+              hint="開一個本機介面（只限這台電腦、需要 token），讓 AI 開出唯讀分頁（放在「AI 討論區」群組）並在裡面打字，你可以在旁邊看。只能操作它自己開的分頁。"
               checked={settings?.agentBridge ?? true}
               onChange={(v) => void setAgentBridge(v)}
             />
             <Toggle
               label="Antigravity：自動允許所有權限"
-              hint="新開的 Antigravity 分頁不再逐一詢問，執行指令、改檔案都直接做（--dangerously-skip-permissions）。唯讀的 🤖 分頁不受影響。已開的分頁要重開才會套用。"
+              hint="新開的 Antigravity 分頁不再逐一詢問，執行指令、改檔案都直接做（--dangerously-skip-permissions）。AI 開的唯讀分頁不受影響。已開的分頁要重開才會套用。"
               checked={settings?.autoApprove?.antigravity ?? false}
               onChange={(v) => void setAutoApprove('antigravity', v)}
             />
