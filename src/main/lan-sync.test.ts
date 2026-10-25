@@ -65,7 +65,7 @@ function memoryStore(initial: Rec[]): { items: Map<string, Rec>; adapter: Return
   return { items, adapter }
 }
 
-function pair(aRecs: Rec[], bRecs: Rec[]) {
+function pair(aRecs: Rec[], bRecs: Rec[], aKnowsBTicked = true) {
   const quiet = { info: () => {}, warn: () => {} }
   const a = memoryStore(aRecs)
   const b = memoryStore(bRecs)
@@ -77,17 +77,18 @@ function pair(aRecs: Rec[], bRecs: Rec[]) {
     mine: { knowledge: mine },
     theirs: { knowledge: theirs }
   })
-  /** Each PC's own tick. */
+  /** Each PC's own tick, and what each believes the other ticked. */
   const ticks = { a: true, b: true }
+  const known = { a: aKnowsBTicked, b: true }
   const nodes: Record<string, LanSync> = {}
   const make = (me: 'a' | 'b', store: typeof a): LanSync => {
     const other = me === 'a' ? 'b' : 'a'
     const adapters = { knowledge: store.adapter, skills: store.adapter, hooks: store.adapter } as Record<SyncCategory, typeof store.adapter>
     return new LanSync({
       myId: () => `id-${me}`,
-      peers: () => [peerOf(`id-${other}`, other.toUpperCase(), ticks[me], ticks[other])],
+      peers: () => [peerOf(`id-${other}`, other.toUpperCase(), ticks[me], known[me])],
       setMine: () => {},
-      setTheirs: () => {},
+      setTheirs: (_id, flags) => void (known[me] = flags.knowledge === true),
       request: (_id, method, params) => nodes[other].serve(`id-${me}`, method, JSON.parse(JSON.stringify(params))),
       adapters,
       bases: { get: (p, c) => (me === 'a' ? (bases.get(`${p}/${c}`) ?? null) : null), set: (p, c, v) => void bases.set(`${p}/${c}`, v) },
@@ -123,6 +124,14 @@ describe('LanSync between two PCs', () => {
     await run()
     expect(b.items.has('k')).toBe(false)
     expect(a.items.get('j')?.text).toBe('edited')
+  })
+
+  it("still starts when the other PC's tick never arrived (one-way firewall)", async () => {
+    const { b, nodes } = pair([{ id: 'k', text: '1' }], [], false)
+    nodes.a.tick()
+    await new Promise((r) => setTimeout(r, 50))
+    await nodes.a.syncPeer('id-b')
+    expect(b.items.get('k')?.text).toBe('1')
   })
 
   it('refuses when the other PC has not ticked the category', async () => {

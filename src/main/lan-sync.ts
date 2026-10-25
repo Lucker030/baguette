@@ -121,6 +121,13 @@ export interface SyncDeps {
 
 const AUTO_MS = 60_000
 
+function readFlags(v: unknown): Partial<Record<SyncCategory, boolean>> {
+  const out: Partial<Record<SyncCategory, boolean>> = {}
+  const raw = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>
+  for (const c of SYNC_CATEGORIES) if (typeof raw[c] === 'boolean') out[c] = raw[c] as boolean
+  return out
+}
+
 export class SyncError extends Error {
   constructor(
     readonly status: number,
@@ -161,10 +168,36 @@ export class LanSync extends EventEmitter {
     return p.mine[cat] === true && p.theirs[cat] === true
   }
 
-  /** Every minute: re-sync whatever is active with online peers (coordinator only). */
+  /**
+   * Every minute, with each peer this PC ticked something for:
+   * exchange ticks (both ways in one call), then re-sync what is active if
+   * this PC coordinates. Exchanging here, not only when a box is clicked,
+   * matters when the LAN only connects one way (a firewall on one PC): a
+   * tick the other PC couldn't deliver still arrives through this call
+   * (seen 2026-10-25: the main PC's network was "Public").
+   */
   tick(): void {
+    // Not gated on "online": that comes from hearing the peer's broadcasts,
+    // which the same firewall can block while a connection out still works.
     for (const p of this.deps.peers()) {
-      if (p.online && this.isCoordinator(p.id) && SYNC_CATEGORIES.some((c) => this.active(p, c))) void this.syncPeer(p.id)
+      if (!SYNC_CATEGORIES.some((c) => p.mine[c])) continue
+      void this.exchangePrefs(p.id, true).then((reached) => {
+        const now = this.peer(p.id)
+        if (reached && this.isCoordinator(p.id) && SYNC_CATEGORIES.some((c) => this.active(now, c))) void this.syncPeer(p.id)
+      })
+    }
+  }
+
+  /** Send this PC's ticks, store the peer's (its reply). False if it couldn't be reached. */
+  private async exchangePrefs(peerId: string, quiet = false): Promise<boolean> {
+    try {
+      const r = (await this.deps.request(peerId, 'sync.prefs', { flags: this.peer(peerId).mine })) as { flags?: unknown }
+      this.deps.setTheirs(peerId, readFlags(r?.flags))
+      this.emit('changed')
+      return true
+    } catch (e) {
+      if (!quiet) this.deps.log.warn(`sync: could not exchange ticks with ${peerId}: ${(e as Error).message}`)
+      return false
     }
   }
 
@@ -175,13 +208,9 @@ export class LanSync extends EventEmitter {
       if (other) throw new SyncError(409, `這一類已經在和「${other.name}」同步（一次只能和一台）`)
     }
     this.deps.setMine(peerId, cat, on)
-    const me = this.deps.peers().find((p) => p.id === peerId)
-    if (!me) return
-    try {
-      await this.deps.request(peerId, 'sync.prefs', { flags: me.mine })
-    } catch (e) {
-      this.deps.log.warn(`sync: could not tell ${me.name} about the change: ${(e as Error).message}`)
-    }
+    if (!this.deps.peers().some((p) => p.id === peerId)) return
+    // Undelivered (peer off, or this way blocked)? tick() retries every minute.
+    await this.exchangePrefs(peerId)
     if (on && this.isCoordinator(peerId) && this.active(this.peer(peerId), cat)) void this.syncPeer(peerId)
   }
 
@@ -195,10 +224,7 @@ export class LanSync extends EventEmitter {
   async serve(peerId: string, method: string, params: unknown): Promise<unknown> {
     const p = (params && typeof params === 'object' ? params : {}) as Record<string, unknown>
     if (method === 'sync.prefs') {
-      const flags: Partial<Record<SyncCategory, boolean>> = {}
-      const raw = (p.flags ?? {}) as Record<string, unknown>
-      for (const c of SYNC_CATEGORIES) if (typeof raw[c] === 'boolean') flags[c] = raw[c] as boolean
-      this.deps.setTheirs(peerId, flags)
+      this.deps.setTheirs(peerId, readFlags(p.flags))
       this.emit('changed')
       // The coordinator starts as soon as both sides agree.
       if (this.isCoordinator(peerId)) void this.syncPeer(peerId)
@@ -250,7 +276,7 @@ export class LanSync extends EventEmitter {
   private async runPeer(peerId: string): Promise<void> {
     for (const cat of SYNC_CATEGORIES) {
       const p = this.peer(peerId)
-      if (!this.active(p, cat) || !p.online) continue
+      if (!this.active(p, cat)) continue
       try {
         await this.syncCategory(p, cat)
       } catch (e) {
