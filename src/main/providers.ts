@@ -461,8 +461,8 @@ export function claudeProjectDirName(claudeSideCwd: string): string {
 
 /**
  * The Windows-accessible folder holding this cwd's session transcripts
- * (`<uuid>.jsonl` files), or null if it can't be determined — e.g. not
- * running via WSL, or the WSL home-dir probe failed. Callers must treat null
+ * (`<uuid>.jsonl` files), or null if it can't be determined — e.g. the WSL
+ * home-dir probe failed. Callers must treat null
  * (and a directory that doesn't exist yet) as "can't discover the session id
  * yet," not an error — see pty-manager.ts.
  */
@@ -470,10 +470,12 @@ export async function claudeProjectDirectory(
   cwd: string,
   claudeConfigDir?: string
 ): Promise<string | null> {
-  if (!claudeUsesWsl()) return null
-  // The project-directory name is always derived from the working directory,
-  // regardless of which CLAUDE_CONFIG_DIR (account) is active.
-  const dirName = claudeProjectDirName(toWslPath(cwd))
+  const wsl = claudeUsesWsl()
+  // The project-directory name is always derived from the working directory
+  // as the CLI itself sees it, regardless of which CLAUDE_CONFIG_DIR
+  // (account) is active. The native Windows CLI names `D:\baguette` as
+  // `D--baguette` — verified against the main PC's real account dirs.
+  const dirName = claudeProjectDirName(wsl ? toWslPath(cwd) : cwd)
   if (claudeConfigDir) {
     // Custom accounts already live at a plain Windows path (see
     // resolveLaunch), so no WSL probe is needed to reach them —
@@ -481,6 +483,9 @@ export async function claudeProjectDirectory(
     // real account dirs, which do use exactly this layout and naming.
     return join(claudeConfigDir, 'projects', dirName)
   }
+  // Without this, a native-Windows Claude never got an id, so every restored
+  // tab fell back to --continue and they all opened the same conversation.
+  if (!wsl) return join(os.homedir(), '.claude', 'projects', dirName)
   const home = await wslHomeUncPathAsync()
   if (!home) return null
   return join(home, '.claude', 'projects', dirName)

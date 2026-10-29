@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 // providers.ts decides which binary a tab launches and, for the WSL fallback,
@@ -177,5 +177,28 @@ describe('which', () => {
     process.env.PATH = join(root, 'nope')
     const { which } = await import('./providers')
     expect(which('definitely-not-installed')).toBeUndefined()
+  })
+})
+
+describe('claudeProjectDirectory', () => {
+  // A native Windows claude.exe used to make this return null, so no tab ever
+  // learned its conversation id and every restored tab ran --continue into
+  // the same conversation. Pin the native layout the main PC really uses.
+  beforeEach(() => {
+    writeFileSync(join(root, 'claude.exe'), '')
+    writeFileSync(join(root, 'claude'), '', { mode: 0o755 })
+    process.env.PATH = root
+    process.env.PATHEXT = '.EXE'
+  })
+
+  it("finds a native Windows account's transcripts under its config dir", async () => {
+    const { claudeProjectDirectory } = await import('./providers')
+    const account = join(root, 'accounts', 'account')
+    expect(await claudeProjectDirectory('D:\\baguette', account)).toBe(join(account, 'projects', 'D--baguette'))
+  })
+
+  it('uses ~/.claude for the default native account', async () => {
+    const { claudeProjectDirectory } = await import('./providers')
+    expect(await claudeProjectDirectory('D:\\baguette')).toBe(join(homedir(), '.claude', 'projects', 'D--baguette'))
   })
 })
