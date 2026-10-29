@@ -271,6 +271,21 @@ function PairedDevice({ device }: { device: LanDevice }): JSX.Element {
           />
           可寫入
         </label>
+        <label
+          title="開啟後，對方可以不經過 AI 分頁，直接在這台電腦執行任何 PowerShell 指令（以你的身分）。每條指令都會記在 log 裡。只對你完全信任的電腦開啟。"
+          className="flex shrink-0 cursor-pointer items-center gap-1.5 text-xs text-txt-dim"
+        >
+          <input
+            type="checkbox"
+            checked={device.allowShell === true}
+            onChange={(e) => {
+              if (e.target.checked && !confirm(`允許「${device.name}」直接在這台電腦執行 PowerShell？它能做任何你能做的事。`)) return
+              void window.api.setLanAllowShell(device.id, e.target.checked)
+            }}
+            className="h-3.5 w-3.5 accent-copilot"
+          />
+          PowerShell
+        </label>
         <button
           onClick={() => {
             if (confirm(`解除和「${device.name}」的配對？之後要再控制得重新配對。`)) void window.api.unpairLanDevice(device.id)

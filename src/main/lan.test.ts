@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import type { BridgeCall, Caller } from './agent-bridge'
 import { LanNode, broadcastAddresses, parseAddress, type LanState } from './lan'
+import type { ShellRequest } from './remote-shell'
 
 // Two real nodes talking over 127.0.0.1 (discovery off, random ports): the
 // rules pinned here are the ones whose failure would let the wrong machine in
@@ -17,10 +18,16 @@ interface TestNode {
 
 const nodes: LanNode[] = []
 
+const shellRuns: { req: ShellRequest; from: { id: string; name: string } }[] = []
+
 async function makeNode(id: string, name: string): Promise<TestNode> {
   let state: LanState = { deviceId: id, peers: [] }
   const calls: TestNode['calls'] = []
   const node = new LanNode({
+    shell: async (req, from) => {
+      shellRuns.push({ req, from })
+      return { exitCode: 0, stdout: `ran on ${name}`, stderr: '', timedOut: false, truncated: false, durationMs: 1 }
+    },
     store: { load: () => state, save: (s) => (state = JSON.parse(JSON.stringify(s)) as LanState) },
     deviceName: () => name,
     version: 'test',
@@ -48,6 +55,7 @@ async function paired(): Promise<{ a: TestNode; b: TestNode }> {
 
 afterEach(() => {
   for (const n of nodes.splice(0)) n.stop()
+  shellRuns.length = 0
 })
 
 describe('pairing', () => {
@@ -99,6 +107,26 @@ describe('calls between paired PCs', () => {
     await a.node.call('PC-B', { kind: 'open', body: { provider: 'claude' } }) // by name works too
     expect(b.calls[1].caller.allowWrite).toBe(true)
     expect(b.calls[1].call).toEqual({ kind: 'open', id: undefined, body: { provider: 'claude' }, lines: undefined })
+  })
+
+  it('runs PowerShell only once the target allowed it, separately from allowWrite', async () => {
+    const { a, b } = await paired()
+    await expect(a.node.shell('id-b', { command: 'hostname' })).rejects.toMatchObject({ status: 403 })
+    b.node.setAllowWrite('id-a', true)
+    await expect(a.node.shell('id-b', { command: 'hostname' })).rejects.toMatchObject({ status: 403 })
+    expect(shellRuns).toEqual([])
+
+    b.node.setAllowShell('id-a', true)
+    expect(b.node.devices()[0].allowShell).toBe(true)
+    await expect(a.node.shell('PC-B', { command: 'hostname', cwd: 'D:\\', timeoutMs: 99_999_999 })).resolves.toMatchObject({
+      exitCode: 0,
+      stdout: 'ran on PC-B'
+    })
+    expect(shellRuns).toEqual([{ req: { command: 'hostname', cwd: 'D:\\', timeoutMs: 3_600_000 }, from: { id: 'id-a', name: 'PC-A' } }])
+    await expect(a.node.shell('id-b', { command: '  ' })).rejects.toMatchObject({ status: 400 })
+
+    b.node.setAllowShell('id-a', false)
+    await expect(a.node.shell('id-b', { command: 'hostname' })).rejects.toMatchObject({ status: 403 })
   })
 
   it('carries the other side\'s error status back', async () => {

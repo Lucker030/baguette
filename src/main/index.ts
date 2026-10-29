@@ -17,6 +17,7 @@ import { appIconPath, createTray } from './tray'
 import { checkForUpdate, installUpdate, RELEASES_PAGE } from './updater'
 import { LanNode } from './lan'
 import { lanStore } from './lan-store'
+import { runPowerShell } from './remote-shell'
 import { LanSync, type Hashes } from './lan-sync'
 import { backupFile, distributeSkills, recordAdapter, skillsAdapter } from './lan-sync-adapters'
 import { writeFileAtomic } from './atomic-write'
@@ -251,6 +252,12 @@ function syncLan(): void {
       syncServe: (peer, method, params) => {
         if (!lanSync) throw new Error('sync unavailable')
         return lanSync.serve(peer, method, params)
+      },
+      shell: async (req, from) => {
+        log.info(`remote shell from ${from.name} (${from.id}) in ${req.cwd ?? '(default dir)'}: ${req.command.slice(0, 500)}`)
+        const r = await runPowerShell(req)
+        log.info(`remote shell from ${from.name}: exit ${r.exitCode}${r.timedOut ? ' (timed out)' : ''} after ${r.durationMs}ms`)
+        return r
       }
     })
     lanNode.on('changed', sendLanState)
@@ -593,6 +600,9 @@ function registerIpc(): void {
   ipcMain.handle('lan:unpair', (_e, id: unknown) => lan().unpair(String(id ?? '')))
   ipcMain.handle('lan:setAllowWrite', (_e, id: unknown, allow: unknown) =>
     lan().setAllowWrite(String(id ?? ''), allow === true)
+  )
+  ipcMain.handle('lan:setAllowShell', (_e, id: unknown, allow: unknown) =>
+    lan().setAllowShell(String(id ?? ''), allow === true)
   )
   ipcMain.handle('lan:call', (_e, deviceId: unknown, call: unknown) => {
     const c = sanitizeLanCall(call)

@@ -93,6 +93,12 @@ noise.
   AES-256-GCM frames with counter nonces. TCP 47610 (falls back to a random
   port, announced over discovery), UDP broadcast 47611. Off by default
   (`lanEnabled`). Secrets in `userData/lan.json` via safeStorage (DPAPI).
+- Remote PowerShell (`remote-shell.ts`, `shell` LAN method, bridge route
+  `POST /v1/devices/<id>/shell`, MCP `baguette_shell`): a paired PC runs a
+  command here directly, no AI tab. Gated by its own per-peer `allowShell`
+  (off by default, never implied by allowWrite, checked by the receiver on
+  every call); every command is logged with the sender. Output is forced to
+  UTF-8 and progress/CLIXML off, or Chinese arrives as cp950 mojibake.
 - LAN sync of 知識庫 / Skills / Hook 庫 (`lan-sync.ts`, `lan-sync-adapters.ts`),
   designed with a Codex review: nothing syncs on its own — the user presses
   開始同步 on either PC and that PC plans; a category syncs only if BOTH PCs

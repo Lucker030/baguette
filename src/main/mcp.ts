@@ -174,6 +174,21 @@ const TOOLS = [
     name: 'baguette_close_tab',
     description: 'Close a tab you opened.',
     inputSchema: { type: 'object', properties: { ...DEVICE, ...TAB }, required: ['tab'] }
+  },
+  {
+    name: 'baguette_shell',
+    description:
+      'Run a Windows PowerShell 5.1 command directly on a paired PC (no AI tab in between) and return its exit code, stdout and stderr. Only works if that PC turned on 允許 PowerShell for this one. Runs as the user signed in there, non-interactive: never start anything that waits for input.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        device: { type: 'string', description: 'The name or id of a paired device (see baguette_devices).' },
+        command: { type: 'string', description: 'PowerShell script text; may span lines.' },
+        cwd: { type: 'string', description: 'Working directory on that PC.' },
+        timeoutSeconds: { type: 'number', description: 'Kill it after this long (default 300, max 3600).' }
+      },
+      required: ['device', 'command']
+    }
   }
 ]
 
@@ -181,12 +196,13 @@ const TOOLS = [
 // approval: Codex refuses an unannotated tool outright when its approval
 // policy is "never" (seen 2026-10-25), so the tools that only read say so.
 // The others act (open a tab, type, close one), though never on files: a
-// bridge tab is read-only unless that PC allowed otherwise.
+// bridge tab is read-only unless that PC allowed otherwise. baguette_shell is
+// the exception: it can do anything on that PC, so it is marked destructive.
 const READ_ONLY = new Set(['baguette_devices', 'baguette_list_tabs', 'baguette_screen', 'baguette_wait'])
 for (const t of TOOLS as (typeof TOOLS[number] & { annotations?: Json })[]) {
   t.annotations = READ_ONLY.has(t.name)
     ? { readOnlyHint: true, openWorldHint: false }
-    : { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false }
+    : { readOnlyHint: false, destructiveHint: t.name === 'baguette_shell', idempotentHint: false, openWorldHint: false }
 }
 
 async function callTool(name: string, a: Json): Promise<string> {
@@ -232,6 +248,16 @@ async function callTool(name: string, a: Json): Promise<string> {
     case 'baguette_close_tab':
       await bridge('DELETE', tabPath(await base(a.device), a.tab))
       return 'closed'
+    case 'baguette_shell': {
+      const b = await base(a.device)
+      if (b === '/v1') throw new Error('device is required: baguette_shell runs on a paired PC, not this one')
+      const r = await bridge('POST', `${b}/shell`, { command: a.command, cwd: a.cwd, timeoutMs: seconds(a.timeoutSeconds, 300_000) })
+      const head = `exit ${String(r.exitCode)}${r.timedOut ? ' (timed out, killed)' : ''}${r.truncated ? ' (output truncated)' : ''} · ${String(r.durationMs)}ms`
+      const parts = [head]
+      if (r.stdout) parts.push(String(r.stdout).trimEnd())
+      if (r.stderr) parts.push(`[stderr]\n${String(r.stderr).trimEnd()}`)
+      return parts.join('\n')
+    }
   }
   throw new Error(`unknown tool ${name}`)
 }
@@ -259,7 +285,7 @@ async function handle(msg: Json): Promise<void> {
             capabilities: { tools: {} },
             serverInfo: { name: 'baguette', version: '1' },
             instructions:
-              'Drive AI CLI tabs in baguette on this PC or on paired LAN PCs: baguette_devices → baguette_open_tab → baguette_send.'
+              'Drive AI CLI tabs in baguette on this PC or on paired LAN PCs: baguette_devices → baguette_open_tab → baguette_send. baguette_shell runs PowerShell on a paired PC directly, if that PC allowed it.'
           }
         })
       }

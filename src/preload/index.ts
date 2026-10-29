@@ -108,6 +108,8 @@ const api = {
   unpairLanDevice: (id: string): Promise<void> => ipcRenderer.invoke('lan:unpair', id),
   setLanAllowWrite: (id: string, allow: boolean): Promise<void> =>
     ipcRenderer.invoke('lan:setAllowWrite', id, allow),
+  setLanAllowShell: (id: string, allow: boolean): Promise<void> =>
+    ipcRenderer.invoke('lan:setAllowShell', id, allow),
   /** The bridge tabs this PC opened on a paired one. */
   listLanTabs: (deviceId: string): Promise<{ tabs: LanRemoteTab[] }> =>
     ipcRenderer.invoke('lan:call', deviceId, { kind: 'list' }),

@@ -6,6 +6,7 @@ import { randomBytes } from 'node:crypto'
 import type { LanDevice, LanStatus, SyncCategory } from '../shared/types'
 import { SYNC_CATEGORIES } from '../shared/types'
 import type { BridgeCall, BridgeKind, Caller } from './agent-bridge'
+import { MAX_COMMAND, SHELL_TIMEOUT_DEFAULT_MS, SHELL_TIMEOUT_MAX_MS, type ShellRequest, type ShellResult } from './remote-shell'
 import {
   FrameCipher,
   FrameReader,
@@ -38,7 +39,8 @@ import {
 //   X25519 exchange, then every frame is AES-256-GCM.
 // - What a peer may do on this PC: only bridge calls, only on tabs it opened
 //   itself, read-only unless this PC turned on allowWrite for it. Same rules
-//   as agent-bridge.ts otherwise.
+//   as agent-bridge.ts otherwise. Running PowerShell directly (`shell`) needs
+//   allowShell, a separate switch that is also off by default.
 //
 // No Electron imports: storage, the bridge and the device name come in as
 // LanDeps, so tests can run two nodes against each other on localhost.
@@ -65,6 +67,8 @@ export interface StoredPeer {
   port?: number
   /** This PC lets the peer open writable tabs here. */
   allowWrite: boolean
+  /** This PC lets the peer run PowerShell here directly (remote-shell.ts). */
+  allowShell?: boolean
   pairedAt: number
   /** What this PC ticked for syncing with the peer (lan-sync.ts). */
   sync?: Partial<Record<SyncCategory, boolean>>
@@ -90,7 +94,9 @@ export interface LanDeps {
   exec(call: BridgeCall, caller: Caller): Promise<unknown>
   /** `sync.*` calls from a paired device (LanSync.serve). */
   syncServe?: (peerId: string, method: string, params: unknown) => Promise<unknown>
-  log: { info(msg: string): void; warn(msg: string): void }
+  /** `shell` calls from a peer this PC set allowShell for (runPowerShell). */
+  shell?: (req: ShellRequest, from: { id: string; name: string }) => Promise<ShellResult>
+  log:{ info(msg: string): void; warn(msg: string): void }
   /** Tests: 0 for any free port. */
   port?: number
   /** Tests: false keeps UDP discovery off. */
@@ -472,6 +478,7 @@ export class LanNode extends EventEmitter {
         paired: true,
         online: Boolean(fresh || connected),
         allowWrite: p.allowWrite,
+        allowShell: p.allowShell === true,
         version: s?.version,
         sync: Object.fromEntries(
           SYNC_CATEGORIES.map((c) => [c, { mine: p.sync?.[c] === true, theirs: p.peerSync?.[c] === true }])
@@ -592,9 +599,22 @@ export class LanNode extends EventEmitter {
     this.emit('changed')
   }
 
+  setAllowShell(id: string, allow: boolean): void {
+    const peer = this.peer(id)
+    if (!peer) return
+    peer.allowShell = allow
+    this.persist()
+    this.emit('changed')
+  }
+
   /** Run a bridge call on a paired device. */
   call(deviceId: string, call: BridgeCall): Promise<unknown> {
     return this.request(deviceId, 'bridge', call)
+  }
+
+  /** Run PowerShell on a paired device (it must have allowShell on for this PC). */
+  shell(deviceId: string, params: { command?: unknown; cwd?: unknown; timeoutMs?: unknown }): Promise<unknown> {
+    return this.request(deviceId, 'shell', params)
   }
 
   /** Any call to a paired device (bridge, sync.*), by id or name. */
@@ -850,6 +870,22 @@ export class LanNode extends EventEmitter {
         lines: typeof p.lines === 'number' ? p.lines : undefined
       }
       return this.deps.exec(call, { owner: peerId, allowWrite: peer.allowWrite, label: peer.name })
+    }
+    if (method === 'shell') {
+      if (!peer.allowShell || !this.deps.shell) {
+        throw new LanError(403, `${this.deps.deviceName()} 沒有允許你直接執行 PowerShell（那台的 內網裝置 → 允許 PowerShell）`)
+      }
+      const p = (params && typeof params === 'object' ? params : {}) as Json
+      const command = typeof p.command === 'string' ? p.command : ''
+      if (!command.trim()) throw new LanError(400, 'command is required')
+      if (command.length > MAX_COMMAND) throw new LanError(413, 'command too long')
+      const t = typeof p.timeoutMs === 'number' && Number.isFinite(p.timeoutMs) ? p.timeoutMs : SHELL_TIMEOUT_DEFAULT_MS
+      const req: ShellRequest = {
+        command,
+        cwd: typeof p.cwd === 'string' && p.cwd ? p.cwd.slice(0, 1000) : undefined,
+        timeoutMs: Math.min(SHELL_TIMEOUT_MAX_MS, Math.max(1000, Math.round(t)))
+      }
+      return this.deps.shell(req, { id: peer.id, name: peer.name })
     }
     if (method.startsWith('sync.') && this.deps.syncServe) return this.deps.syncServe(peerId, method, params)
     throw new LanError(404, `unknown method ${method}`)

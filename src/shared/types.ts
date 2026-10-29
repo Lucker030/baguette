@@ -186,6 +186,8 @@ export interface LanDevice {
   online: boolean
   /** Paired only: this PC lets it open writable tabs here. */
   allowWrite?: boolean
+  /** Paired only: this PC lets it run PowerShell here directly. */
+  allowShell?: boolean
   version?: string
   /** Paired only: what each side ticked for syncing (main/lan-sync.ts). */
   sync?: Record<SyncCategory, { mine: boolean; theirs: boolean }>

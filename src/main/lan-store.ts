@@ -53,6 +53,7 @@ function readPeer(v: unknown): StoredPeer | null {
     address: typeof p.address === 'string' ? p.address : undefined,
     port: typeof p.port === 'number' ? p.port : undefined,
     allowWrite: p.allowWrite === true,
+    allowShell: p.allowShell === true,
     pairedAt: typeof p.pairedAt === 'number' ? p.pairedAt : 0,
     sync: readFlags(p.sync),
     peerSync: readFlags(p.peerSync)

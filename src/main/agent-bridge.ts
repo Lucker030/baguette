@@ -68,6 +68,7 @@ export interface BridgeLan {
   startPairing(): unknown
   cancelPairing(): void
   pair(target: { deviceId?: string; address?: string }, code: string): Promise<unknown>
+  shell(deviceId: string, params: { command?: unknown; cwd?: unknown; timeoutMs?: unknown }): Promise<unknown>
 }
 
 export type BridgeKind = 'list' | 'open' | 'input' | 'screen' | 'wait' | 'close'
@@ -215,15 +216,20 @@ export type Route =
   | { kind: 'pairing-start' }
   | { kind: 'pairing-stop' }
   | { kind: 'pair' }
+  | { kind: 'shell'; device: string }
   | null
 
 /**
  * `/v1/tabs/...` acts on this PC; `/v1/devices/<id>/tabs/...` on a paired
  * one. `/v1/devices` lists them, `/v1/lan/pairing` shows / withdraws this
  * PC's pairing code and `/v1/lan/pair` pairs with another PC.
+ * `/v1/devices/<id>/shell` runs PowerShell on a paired PC; there is no local
+ * one, since a caller on this PC already has its own shell.
  */
 export function parseRoute(method: string | undefined, path: string): Route {
   if (/^\/v1\/devices\/?$/.test(path)) return method === 'GET' ? { kind: 'devices' } : null
+  const sh = /^\/v1\/devices\/([\w-]+)\/shell\/?$/.exec(path)
+  if (sh) return method === 'POST' ? { kind: 'shell', device: sh[1] } : null
   if (/^\/v1\/lan\/pairing\/?$/.test(path)) {
     return method === 'POST' ? { kind: 'pairing-start' } : method === 'DELETE' ? { kind: 'pairing-stop' } : null
   }
@@ -359,10 +365,19 @@ export class AgentBridge {
       if (!route) return send(404, { error: 'no such endpoint' })
       const body = req.method === 'POST' ? await readJson(req) : {}
 
-      if (route.kind === 'devices' || route.kind === 'pairing-start' || route.kind === 'pairing-stop' || route.kind === 'pair') {
+      if (
+        route.kind === 'devices' ||
+        route.kind === 'pairing-start' ||
+        route.kind === 'pairing-stop' ||
+        route.kind === 'pair' ||
+        route.kind === 'shell'
+      ) {
         const lan = this.deps.lan?.() ?? null
         if (!lan) throw new HttpError(409, 'LAN control is off (baguette → 內網裝置 → 啟用)')
         if (route.kind === 'devices') return send(200, { devices: lan.devices() })
+        if (route.kind === 'shell') {
+          return send(200, await lan.shell(route.device, { command: body.command, cwd: body.cwd, timeoutMs: body.timeoutMs }))
+        }
         if (route.kind === 'pairing-start') return send(200, lan.startPairing())
         if (route.kind === 'pairing-stop') {
           lan.cancelPairing()
