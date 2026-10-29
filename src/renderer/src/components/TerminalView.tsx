@@ -3,6 +3,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon } from '@xterm/addon-search'
 import { WebLinksAddon } from '@xterm/addon-web-links'
+import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { quoteForShell } from '../pathText'
 import { useApp } from '../store/sessions'
 import { matchShortcut } from '../shortcuts'
@@ -93,6 +94,12 @@ export function TerminalView({ id, active }: { id: string; active: boolean }): J
     // URLs a CLI prints become clickable. window.open goes through main's
     // setWindowOpenHandler, which only lets http(s) reach the OS browser.
     term.loadAddon(new WebLinksAddon((_e, uri) => window.open(uri, '_blank')))
+    // xterm defaults to Unicode 6 widths, but Claude Code lays out its UI with
+    // modern ones, so symbols like ⏺ ✻ and emoji were one cell off: the cursor
+    // drifted (a phantom space while typing) and repaints left a line drawn
+    // twice. Unicode 11 widths match what the CLI assumes.
+    term.loadAddon(new Unicode11Addon())
+    term.unicode.activeVersion = '11'
     term.open(host)
     let shownAtMount = false
     try {
@@ -183,6 +190,16 @@ export function TerminalView({ id, active }: { id: string; active: boolean }): J
         e.preventDefault()
         e.stopImmediatePropagation()
         void paste()
+        return false
+      }
+      // Plain Ctrl+C with text selected copies it, the Windows Terminal
+      // convention. Without this it reached the CLI as an interrupt, and
+      // Claude Code exits on a second Ctrl+C, so copying ended the session.
+      // With nothing selected it still goes through as Ctrl+C.
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'c' && term.hasSelection()) {
+        e.preventDefault()
+        void window.api.writeClipboardText(term.getSelection())
+        term.clearSelection()
         return false
       }
       // Copy has to be handled here rather than in App's global handler: only

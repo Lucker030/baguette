@@ -23,6 +23,7 @@
   "dependencies": {
     "@homebridge/node-pty-prebuilt-multiarch": "^0.14.1",
     "@noble/curves": "1.9.7",
+    "@xterm/addon-unicode11": "^0.8.0",
     "@xterm/headless": "^5.5.0"
   },
   "devDependencies": {
